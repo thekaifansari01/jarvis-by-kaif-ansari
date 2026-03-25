@@ -1,15 +1,35 @@
-requests
-fake-useragent          # For randomizing identity
-cachetools              # For caching search results
+# AI & LLM
+groq
+cohere
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
 
-# --- Automation & System Control ---
-pyautogui               # Mouse & Keyboard control
-pyperclip               # Clipboard management (often needed)
-Pillow                  # Image processing (needed for screenshots)
+# Voice & Audio
+pvporcupine
+pvrecorder
+edge-tts
+SpeechRecognition
+PyAudio
+pygame
 
-# --- UI & Visuals (Popup) ---
-PyQt5                   # The GUI framework
-markdown2               # To render bold/italic text in popup
+# Web & Search
+google-search-results
+curl_cffi
+beautifulsoup4
+cloudscraper
 
-# --- Audio & Multimedia (Seen in logs) ---
-pygame                  # For playing audio responses
+# Database & Data
+chromadb
+numpy
+pickle5
+
+# Automation & UI
+PyAutoGUI
+pywhatkit
+PyQt5
+rich
+
+# Utils
+python-dotenv
