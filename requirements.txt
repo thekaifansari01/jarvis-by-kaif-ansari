@@ -1,0 +1,15 @@
+requests
+fake-useragent          # For randomizing identity
+cachetools              # For caching search results
+
+# --- Automation & System Control ---
+pyautogui               # Mouse & Keyboard control
+pyperclip               # Clipboard management (often needed)
+Pillow                  # Image processing (needed for screenshots)
+
+# --- UI & Visuals (Popup) ---
+PyQt5                   # The GUI framework
+markdown2               # To render bold/italic text in popup
+
+# --- Audio & Multimedia (Seen in logs) ---
+pygame                  # For playing audio responses
