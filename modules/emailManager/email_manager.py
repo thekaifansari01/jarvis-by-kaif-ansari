@@ -1,6 +1,7 @@
 import os
 import time
 import base64
+import mimetypes  # ⚡ Added for attachment support
 from email.message import EmailMessage
 from datetime import datetime
 from groq import Groq
@@ -23,19 +24,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # 🔥 CRITICAL UPDATE: Full Mail Access Scope (Read, Send, Delete, Modify)
-# Purana token.json delete karna zaroori hai!
 SCOPES = ['https://mail.google.com/']
 
-# Function ko isse replace karo
 def authenticate_gmail():
     """Google API connection with relative path management."""
-    # Current file (email_monitor.py) ka folder path nikal raha hoon
     base_path = os.path.dirname(os.path.abspath(__file__))
     credentials_path = os.path.join(base_path, 'credentials.json')
     token_path = os.path.join(base_path, 'token.json')
 
     creds = None
-    # Token check
     if os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
     
@@ -51,17 +48,16 @@ def authenticate_gmail():
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
         
-        # Token save
         with open(token_path, 'w') as token:
             token.write(creds.to_json())
             
     return build('gmail', 'v1', credentials=creds)
 
 # ==========================================
-# 🚀 1. ACTION: SEND EMAIL
+# 🚀 1. ACTION: SEND EMAIL (WITH ATTACHMENT)
 # ==========================================
-def send_email(to_address, subject, body):
-    """Jarvis ke through kisi ko email bhejna."""
+def send_email(to_address, subject, body, attachment_path=None):
+    """Jarvis ke through kisi ko email bhejna, ab attachments ke saath."""
     try:
         service = authenticate_gmail()
         message = EmailMessage()
@@ -69,6 +65,20 @@ def send_email(to_address, subject, body):
         message['To'] = to_address
         message['From'] = 'me'
         message['Subject'] = subject
+
+        # ⚡ ATTACHMENT LOGIC
+        if attachment_path and os.path.exists(attachment_path):
+            ctype, encoding = mimetypes.guess_type(attachment_path)
+            if ctype is None or encoding is not None:
+                ctype = 'application/octet-stream'
+            maintype, subtype = ctype.split('/', 1)
+
+            with open(attachment_path, 'rb') as fp:
+                message.add_attachment(fp.read(),
+                                       maintype=maintype,
+                                       subtype=subtype,
+                                       filename=os.path.basename(attachment_path))
+            print(f"📎 Attached file: {os.path.basename(attachment_path)}")
 
         # Google API requires base64 urlsafe format
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -88,7 +98,6 @@ def delete_email(query):
     """Email delete karna (e.g., query="from:spammer@gmail.com")"""
     try:
         service = authenticate_gmail()
-        # Pehle search karo us query ke hisaab se
         results = service.users().messages().list(userId='me', q=query, maxResults=1).execute()
         messages = results.get('messages', [])
         
@@ -97,7 +106,6 @@ def delete_email(query):
             return False
 
         msg_id = messages[0]['id']
-        # Email ko Trash mein daalo
         service.users().messages().trash(userId='me', id=msg_id).execute()
         print(f"🗑️ Email successfully moved to Trash. (Query: {query})")
         return True
@@ -106,7 +114,7 @@ def delete_email(query):
         return False
 
 # ==========================================
-# 📡 3. BACKGROUND RADAR (Pehle Wala)
+# 📡 3. BACKGROUND RADAR
 # ==========================================
 def summarize_email(sender, subject, snippet):
     if not client: return f"Sir, {sender.split('<')[0]} se ek naya mail aaya hai."
@@ -153,4 +161,3 @@ def check_new_emails():
             time.sleep(1) 
     except Exception as e:
         print(f"⚠️ Gmail Error: {e}")
-

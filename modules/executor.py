@@ -5,11 +5,17 @@ from tools.open_any import open_any_app
 from tools.close_any import close_any_app
 from tools.generate_image import handle_image_command 
 from tools.gui_automation import perform_gui_action
-from tools.perform_search import perform_search
+
+# ⚡ Agentic Search Hub
+from tools.search_tools.search_hub import execute_search_actions
+
+# 📧 Email & 📱 WhatsApp Managers
 from modules.emailManager.email_manager import send_email, delete_email
+from tools.messenger import send_whatsapp_message
+
 from modules.voice.tts import speak
 
-# ⚡ NAYE IMPORTS: Workspace aur File System operations ke liye
+# Workspace aur File System operations ke liye
 from modules.workspace import workspace
 import shutil
 import platform
@@ -89,6 +95,9 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
         def manage_workspace(action_type, fname):
             if not fname: return None
             
+            # Clean filename from any slashes sent by AI
+            fname = fname.strip("/\\")
+            
             # File ko teeno sub-folders mein dhoondho
             file_path = None
             for d in [workspace.creations_dir, workspace.vault_dir, workspace.temp_dir]:
@@ -120,16 +129,12 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     return None
                     
                 elif action_type == "move":
-                    # 🛡️ 1. Fetch Target & Validate
                     dest_folder_name = workspace_cmd.get('to', 'Vault').capitalize()
-                    
-                    # Strict Security Lock: Only 3 allowed folders
                     if dest_folder_name not in ["Vault", "Creations", "Temp"]:
                         dest_folder_name = "Vault"
                         
                     dest_dir = getattr(workspace, f"{dest_folder_name.lower()}_dir", workspace.vault_dir)
                     
-                    # 🛡️ 2. Overwrite Protection (Auto-rename logic)
                     base_name, ext = os.path.splitext(fname)
                     counter = 1
                     safe_name = fname
@@ -138,38 +143,34 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                         counter += 1
                         
                     dest_path = dest_dir / safe_name
-                    
-                    # 🚀 3. Execute Move
                     shutil.move(str(file_path), str(dest_path))
                     log_action(f"📦 Moved {fname} to {dest_folder_name} as {safe_name}")
                     
-                    # 4. Update Registry & Speak
                     workspace.add_file_record(safe_name, dest_folder_name, f"Moved by Jarvis from {file_path.parent.name}")
                     workspace.sync_registry()
                     
-                    # Voice feedback for the user
                     executor.submit(speak, f"Bhai, maine file ko {dest_folder_name} mein move kar diya hai.")
                     return None
                     
                 elif action_type == "read":
                     log_action(f"📖 Reading workspace file: {fname}")
+                    # Security Check: Only read text-based files
+                    if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.pdf', '.exe')):
+                        return f"❌ Error: Cannot read binary file '{fname}'. Use 'open' instead."
+                    
                     with open(file_path, "r", encoding="utf-8") as f:
                         content = f.read()
-                    # Return data for the LLM to process
-                    return f"📁 File Content ({fname}):\n{content[:5000]}" # Thoda token limit badha diya hai!
+                    return f"📁 File Content ({fname}):\n{content[:5000]}"
                     
             except Exception as e:
                 log_action(f"❌ Workspace action '{action_type}' failed: {e}")
                 return None
 
-        # Execute Workspace logic
         if act == "read":
-            # "Read" must be synchronous so the data can be returned to Pass 2
             read_data = manage_workspace(act, target_file)
             if read_data:
                 search_results += f"\n{read_data}"
         else:
-            # "Open", "Move", "Delete" run in the background thread
             executor.submit(manage_workspace, act, target_file)
     
     # 🖱️ 3.9 GUI Actions
@@ -183,57 +184,98 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     if gui_response: log_action(gui_response)
         executor.submit(thread_gui, gui_actions)
 
-    # 🌐 4. Information Gathering (Search)
-    search_query = result.get('search_query')
-    if search_query:
+    # 🌐 4. Information Gathering (AGENTIC SEARCH HUB)
+    search_actions = result.get('search_actions')
+    if search_actions and isinstance(search_actions, dict) and any(search_actions.values()):
         try:
-            search_output = perform_search(search_query, return_results=True)
+            log_action(f"🚀 Triggering Agentic Search Hub: {list(search_actions.keys())}")
+            search_output = execute_search_actions(search_actions)
             if search_output:
-                search_results += "\n" + "\n".join([
-                    f"Result {i+1}: {r['title']} ({r['link']})\nSnippet: {r['snippet'][:200]}...\nReliability: {'High' if r['reliable'] else 'Standard'}"
-                    for i, r in enumerate(search_output)
-                ])
-                log_action(f"Search results for query '{search_query}' fetched.")
-            else:
-                log_action(f"No search results for query: {search_query}")
+                search_results += "\n" + search_output
+                log_action("✅ Search data fetched.")
         except Exception as e:
-            log_action(f"Search failed for query '{search_query}': {e}")
+            log_action(f"❌ Search Hub failed: {e}")
 
     # 🛑 5. Universal Agentic Manager
-    external_actions = [k for k in result.keys() if k.endswith('_action') and k != 'gui_action' and result[k]]
+    external_actions = [k for k in result.keys() if k.endswith('_action') and k != 'gui_action' and result.get(k)]
     execute_external = True
     
-    # ⚡ FIX: Pause tools if we searched the web OR read a file
-    has_fetched_data = bool(search_query) or (workspace_cmd and workspace_cmd.get('action') == 'read')
+    has_fetched_data = bool(search_actions and any(search_actions.values())) or (workspace_cmd and workspace_cmd.get('action') == 'read')
     
     if has_fetched_data and external_actions:
-        log_action(f"🛑 Universal Manager: Data Fetch + {external_actions} detected. Pausing tools until AI reads data.")
+        log_action(f"🛑 Universal Manager: Pausing external tools for Pass 2.")
         execute_external = False
 
-    # 📧 6. Execute External Tools (Email)
+    # 📧 + 📱 6. Execute External Tools (Email & WhatsApp)
     if execute_external:
+        # --- EMAIL BLOCK ---
         email_action = result.get('email_action', {})
         if email_action and isinstance(email_action, dict) and email_action.get('action_type'):
             action_type = email_action.get('action_type')
             params = email_action.get('params', {})
             
             if action_type == "send":
-                contact_book = {}
-                contact_file_path = os.path.join(os.path.dirname(__file__), "emailManager", "contact_book.json")
-                try:
-                    with open(contact_file_path, "r", encoding="utf-8") as f:
-                        contact_book = json.load(f)
-                except (FileNotFoundError, json.JSONDecodeError):
-                    log_action("⚠️ Warning: Contact book not found or corrupted.")
+                def thread_email():
+                    contact_book = {}
+                    contact_file_path = os.path.join(os.path.dirname(__file__), "emailManager", "contact_book.json")
+                    try:
+                        with open(contact_file_path, "r", encoding="utf-8") as f:
+                            contact_book = json.load(f)
+                    except: pass
 
-                requested_to = params.get('to', '').lower()
-                to_address = contact_book.get(requested_to, params.get('to', ''))
-                
-                log_action(f"Drafting Email to: {to_address}")
-                success = send_email(to_address, params.get('subject', 'Update'), params.get('body', ''))
-                if success: log_action("Email sent successfully.")
+                    requested_to = params.get('to', '').lower()
+                    to_address = contact_book.get(requested_to, params.get('to', ''))
                     
+                    # ⚡ FIX: Extract and resolve the file path just like WhatsApp
+                    file_path_raw = params.get('file_path', '')
+                    attachment_abs_path = None
+                    
+                    if file_path_raw:
+                        clean_rel_path = file_path_raw.lstrip("/\\")
+                        potential_path = workspace.base_path / clean_rel_path
+                        if potential_path.exists():
+                            attachment_abs_path = str(potential_path)
+                        else:
+                            log_action(f"⚠️ Email Alert: File not found at {potential_path}")
+
+                    log_action(f"📧 Drafting Email to: {to_address} (Attachment: {'Yes' if attachment_abs_path else 'No'})")
+                    success = send_email(
+                        to_address, 
+                        params.get('subject', 'Update'), 
+                        params.get('body', ''),
+                        attachment_abs_path
+                    )
+                    if success: log_action("✅ Email sent successfully.")
+                
+                executor.submit(thread_email)
+            
             elif action_type == "delete":
-                delete_email(params.get('query', ''))
+                executor.submit(delete_email, params.get('query', ''))
+
+        # --- WHATSAPP BLOCK ---
+        whatsapp_action = result.get('whatsapp_action', {})
+        if whatsapp_action and isinstance(whatsapp_action, dict) and whatsapp_action.get('to'):
+            to_name = whatsapp_action.get('to')
+            msg_body = whatsapp_action.get('message', '')
+            file_path_raw = whatsapp_action.get('file_path', '')
+            
+            def thread_whatsapp():
+                attachment_abs_path = None
+                
+                if file_path_raw:
+                    # 🛡️ FIX: Remove leading slashes to prevent absolute path hijacking in Pathlib
+                    clean_rel_path = file_path_raw.lstrip("/\\")
+                    potential_path = workspace.base_path / clean_rel_path
+                    
+                    if potential_path.exists():
+                        attachment_abs_path = str(potential_path)
+                    else:
+                        log_action(f"⚠️ WhatsApp Alert: File not found at {potential_path}")
+                
+                log_action(f"📱 Sending WhatsApp to '{to_name}'...")
+                wa_result = send_whatsapp_message(to_name, msg_body, attachment_abs_path)
+                log_action(wa_result)
+                
+            executor.submit(thread_whatsapp)
 
     return search_results

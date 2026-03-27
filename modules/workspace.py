@@ -81,7 +81,7 @@ class WorkspaceManager:
                         # Auto-register newly pasted files
                         valid_files.append({
                             "filename": filename,
-                            "location": f"/{folder_name}",
+                            "location": "folder_name",
                             "description": "Manually added to workspace",
                             "added_on": datetime.now().strftime("%Y-%m-%d %H:%M")
                         })

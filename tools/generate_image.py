@@ -16,8 +16,8 @@ from modules.workspace import workspace
 load_dotenv()
 
 # Together AI Setup (For Fast Flux Generation)
-VISION_API_KEY = os.getenv("VISION_API_KEY")
-together_client = Together(api_key=VISION_API_KEY) if VISION_API_KEY else None
+TOGETHER_AI = os.getenv("TOGETHER_AI")
+together_client = Together(api_key=TOGETHER_AI) if TOGETHER_AI else None
 
 def image_to_base64(image_path):
     """Image ko base64 mein convert karta hai (Editing ke liye)"""
@@ -27,7 +27,7 @@ def image_to_base64(image_path):
 # --- ENGINE 1: FLUX (Together AI) for Generation ---
 def generate_flux(prompt, filename):
     if not together_client:
-        logger.error("VISION_API_KEY nahi mila. .env file check karein!")
+        logger.error("TOGETHER_AI nahi mila. .env file check karein!")
         return None
 
     logger.info(f"Jarvis is generating NEW image with FLUX: {prompt}")
