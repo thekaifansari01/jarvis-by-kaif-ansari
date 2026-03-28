@@ -18,7 +18,7 @@ def save_command_history() -> None:
     pass
 
 def generate_context_summary() -> str:
-    """Generate a clean, text-based summary of recent conversation + actions."""
+    """Generate a clean, text-based summary of recent conversation + ALL actions."""
     if not command_history:
         return "No previous conversation."
     
@@ -34,7 +34,7 @@ def generate_context_summary() -> str:
         # 1. Capture what Jarvis said
         response_text = result.get("response", "").strip()
         
-        # 2. Capture what Jarvis actually DID (Actions)
+        # 2. Capture ALL things Jarvis actually DID (Actions)
         actions = []
         if result.get("apps_to_open"):
             actions.append(f"opened {', '.join(result['apps_to_open'])}")
@@ -42,12 +42,22 @@ def generate_context_summary() -> str:
             actions.append(f"closed {', '.join(result['apps_to_close'])}")
         if result.get("youtube_play"):
             actions.append(f"played on youtube: {result['youtube_play']}")
-        if result.get("search_query"):
-            actions.append(f"searched for: {result['search_query']}")
+        if result.get("search_actions"):
+            actions.append(f"searched live data")
+            
+        # ⚡ NEW MEMORY FIXES (So Jarvis doesn't forget files/actions)
+        if result.get("image_command") and result["image_command"].get("action"):
+            actions.append(f"generated image")
+        if result.get("workspace_action") and result["workspace_action"].get("action"):
+            actions.append(f"managed workspace file: {result['workspace_action'].get('file', '')}")
+        if result.get("email_action") and result["email_action"].get("action_type"):
+            actions.append(f"sent email to {result['email_action'].get('params', {}).get('to', '')}")
+        if result.get("whatsapp_action") and result["whatsapp_action"].get("to"):
+            actions.append(f"sent whatsapp to {result['whatsapp_action'].get('to', '')}")
             
         action_str = f" [System Action: {', '.join(actions)}]" if actions else ""
         
-        # 3. Format the interaction perfectly for Llama 70B
+        # 3. Format the interaction perfectly for Llama
         interaction = f"User: {cmd}"
         if response_text:
             interaction += f"\nJarvis: {response_text}{action_str}"
