@@ -147,6 +147,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     if platform.system() == 'Windows': os.startfile(str(file_path))
                     elif platform.system() == 'Darwin': subprocess.call(('open', str(file_path)))
                     else: subprocess.call(('xdg-open', str(file_path)))
+                    executor.submit(speak, f"Sir, maine {file_path.name} khol diya.")
                     return None
                         
                 elif action_type == "delete":
@@ -203,6 +204,29 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
         else:
             executor.submit(manage_workspace, act, target_file)
     
+    # 📂 5b. FAST BRAIN WORKSPACE FILE OPEN (Direct file open from Fast Brain)
+    workspace_file_to_open = result.get('workspace_file_to_open')
+    if workspace_file_to_open and isinstance(workspace_file_to_open, str) and workspace_file_to_open.strip():
+        def open_workspace_file_fast(filename):
+            file_path = smart_file_finder(filename)
+            if file_path:
+                log_action(f"📂 Fast Brain: Opening workspace file: {file_path.name}")
+                try:
+                    if platform.system() == 'Windows':
+                        os.startfile(str(file_path))
+                    elif platform.system() == 'Darwin':
+                        subprocess.call(('open', str(file_path)))
+                    else:
+                        subprocess.call(('xdg-open', str(file_path)))
+                    executor.submit(speak, f"Sir, {file_path.name} khol diya.")
+                except Exception as e:
+                    log_action(f"❌ Failed to open file: {e}")
+                    executor.submit(speak, f"Sir, file nahi khul rahi.")
+            else:
+                log_action(f"❌ Workspace file not found: {filename}")
+                executor.submit(speak, f"Sir, '{filename}' workspace mein nahi mili.")
+        executor.submit(open_workspace_file_fast, workspace_file_to_open.strip())
+
     # 🖱️ 6. GUI Actions
     gui_actions = result.get('gui_action', [])
     if isinstance(gui_actions, dict): gui_actions = [gui_actions]
