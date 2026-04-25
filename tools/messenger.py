@@ -26,7 +26,7 @@ def load_contacts():
         return json.load(f)
 
 def compress_image_for_upload(file_path: str) -> str:
-    """
+    """ 
     ⚡ AUTO-COMPRESSION ENGINE:
     Badi images (jaise 8K FLUX) ko upload se pehle chhota karta hai.
     Isse upload 10x fast hota hai aur timeout ka error nahi aata.

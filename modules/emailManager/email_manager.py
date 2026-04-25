@@ -1,9 +1,9 @@
 import os
 import time
 import base64
-import mimetypes  # ⚡ Added for attachment support
+import mimetypes
 from email.message import EmailMessage
-from datetime import datetime
+from datetime import datetime, timedelta
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -23,7 +23,6 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# 🔥 CRITICAL UPDATE: Full Mail Access Scope (Read, Send, Delete, Modify)
 SCOPES = ['https://mail.google.com/']
 
 def authenticate_gmail():
@@ -54,19 +53,27 @@ def authenticate_gmail():
     return build('gmail', 'v1', credentials=creds)
 
 # ==========================================
-# 🚀 1. ACTION: SEND EMAIL (WITH ATTACHMENT)
+# 🚀 1. ACTION: SEND EMAIL (WITH ATTACHMENT + FALLBACK)
 # ==========================================
 def send_email(to_address, subject, body, attachment_path=None):
     """Jarvis ke through kisi ko email bhejna, ab attachments ke saath."""
+    
+    # 🔧 FIX: Agar attachment path diya gaya hai aur file exist nahi karti, toh fail karo
+    if attachment_path and not os.path.exists(attachment_path):
+        print(f"❌ Attachment file missing: {attachment_path}")
+        return False
+    
     try:
         service = authenticate_gmail()
+        if not service:
+            return False
+            
         message = EmailMessage()
         message.set_content(body)
         message['To'] = to_address
         message['From'] = 'me'
         message['Subject'] = subject
 
-        # ⚡ ATTACHMENT LOGIC
         if attachment_path and os.path.exists(attachment_path):
             ctype, encoding = mimetypes.guess_type(attachment_path)
             if ctype is None or encoding is not None:
@@ -80,7 +87,6 @@ def send_email(to_address, subject, body, attachment_path=None):
                                        filename=os.path.basename(attachment_path))
             print(f"📎 Attached file: {os.path.basename(attachment_path)}")
 
-        # Google API requires base64 urlsafe format
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
         create_message = {'raw': encoded_message}
 
@@ -95,9 +101,10 @@ def send_email(to_address, subject, body, attachment_path=None):
 # 🗑️ 2. ACTION: DELETE EMAIL
 # ==========================================
 def delete_email(query):
-    """Email delete karna (e.g., query="from:spammer@gmail.com")"""
     try:
         service = authenticate_gmail()
+        if not service:
+            return False
         results = service.users().messages().list(userId='me', q=query, maxResults=1).execute()
         messages = results.get('messages', [])
         
@@ -114,10 +121,11 @@ def delete_email(query):
         return False
 
 # ==========================================
-# 📡 3. BACKGROUND RADAR
+# 📡 3. BACKGROUND RADAR (WITH DYNAMIC DATE)
 # ==========================================
 def summarize_email(sender, subject, snippet):
-    if not client: return f"Sir, {sender.split('<')[0]} se ek naya mail aaya hai."
+    if not client:
+        return f"Sir, {sender.split('<')[0]} se ek naya mail aaya hai."
     prompt = f"""
     Analyze this email: From: {sender} | Subject: {subject} | Content: {snippet}
     Task: Provide a factual, max 12 words Hinglish summary.
@@ -136,11 +144,18 @@ def summarize_email(sender, subject, snippet):
 def check_new_emails():
     try:
         service = authenticate_gmail()
-        query = "is:unread after:2026/03/21"
+        if not service:
+            return
+            
+        # 🔧 FIX: Dynamic date – last 7 days
+        days_ago = (datetime.now() - timedelta(days=7)).strftime('%Y/%m/%d')
+        query = f"is:unread after:{days_ago}"
+        
         results = service.users().messages().list(userId='me', q=query, labelIds=['INBOX']).execute()
         messages = results.get('messages', [])
 
-        if not messages: return 
+        if not messages:
+            return
 
         print(f"📧 [{datetime.now().strftime('%I:%M %p')}] New mail detected...")
         for msg in messages:
@@ -149,8 +164,10 @@ def check_new_emails():
             subject = "No Subject"
             sender = "Unknown"
             for header in headers:
-                if header['name'] == 'Subject': subject = header['value']
-                if header['name'] == 'From': sender = header['value']
+                if header['name'] == 'Subject':
+                    subject = header['value']
+                if header['name'] == 'From':
+                    sender = header['value']
             
             snippet = msg_data.get('snippet', '')
             summary = summarize_email(sender, subject, snippet)
@@ -158,6 +175,6 @@ def check_new_emails():
             speak(summary)
 
             service.users().messages().modify(userId='me', id=msg['id'], body={'removeLabelIds': ['UNREAD']}).execute()
-            time.sleep(1) 
+            time.sleep(1)
     except Exception as e:
         print(f"⚠️ Gmail Error: {e}")
