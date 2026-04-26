@@ -13,12 +13,12 @@ CONFIG = {
     "LOG_FILE": "Data/jarvis.log",
     "HISTORY_FILE": "Data/command_history.pkl",
     
-    # 🆕 Agentic Loop Configuration (UPDATED)
-    "AGENT_MAX_STEPS": 10,           # Max steps before loop exits
-    "AGENT_TIMEOUT": 120,           # ✅ Increased from 60 to 120 seconds
-    "AGENT_RETRY_LIMIT": 2,         # Retry attempts on tool failure
-    "AGENT_SCRATCHPAD_MAX_CHARS": 8000,  # Max chars before summarization
+    # Agentic Loop Configuration
+    "AGENT_MAX_STEPS": 10,
+    "AGENT_TIMEOUT": 120,
+    "AGENT_RETRY_LIMIT": 2,
+    "AGENT_SCRATCHPAD_MAX_CHARS": 8000,
 }
 
-# API keys
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+# Google Gemini API key (used for embeddings and LLM)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

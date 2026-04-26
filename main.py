@@ -1,6 +1,8 @@
 import sys
 import time
 import threading
+import subprocess
+import os
 import pygame
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,14 +15,56 @@ from modules.executor import execute_actions
 from modules.memory import ContextMemory
 from modules.voice import stt, tts 
 from modules.scout.scout import SmartScout 
-
+import logging
+import asyncio
 import asyncio
 import platform
+
+# Suppress annoying asyncio/aiohttp unclosed session warnings in Windows
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 if platform.system() == 'Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
 _is_running = True
+_panel_process = None  # To track agent panel subprocess
+
+def start_agent_panel():
+    """Start agent_panel.py as a background subprocess (without extra console window)"""
+    global _panel_process
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        panel_script = os.path.join(base_dir, "modules", "agent_panel.py")
+        
+        if os.path.exists(panel_script):
+            # Use CREATE_NO_WINDOW flag on Windows to avoid extra console
+            creation_flags = 0
+            if platform.system() == 'Windows':
+                creation_flags = subprocess.CREATE_NO_WINDOW
+                
+            _panel_process = subprocess.Popen(
+                [sys.executable, panel_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags
+            )
+            logger.info("✅ Agent Panel started automatically (background)")
+        else:
+            logger.warning(f"⚠️ Agent panel not found at {panel_script}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not start agent panel: {e}")
+
+def stop_agent_panel():
+    """Terminate agent panel subprocess"""
+    global _panel_process
+    if _panel_process:
+        try:
+            _panel_process.terminate()
+            _panel_process.wait(timeout=2)
+        except:
+            _panel_process.kill()
+        _panel_process = None
+        logger.info("🛑 Agent Panel stopped")
 
 def main_command_processor(command: str, executor: ThreadPoolExecutor, memory: ContextMemory) -> None:
     """
@@ -71,6 +115,9 @@ def main() -> None:
     
     is_dev_mode = len(sys.argv) > 1 and sys.argv[1] == "test_jarvis"
     
+    # 🆕 Start agent panel before anything else
+    start_agent_panel()
+    
     if not is_dev_mode:
         logger.info("⏳ Waiting 10s for system startup...")
         time.sleep(10) 
@@ -85,6 +132,7 @@ def main() -> None:
             def get_relevant_context(self, text): return ""
             def add_message(self, role, text): pass
             preferences = {"likes": []}
+            ephemeral = {}
         memory = FakeMemory()
 
     try:
@@ -152,6 +200,9 @@ def main() -> None:
     save_command_history()
     tts.cleanup_temp()
     pygame.quit()
+    
+    # 🆕 Stop agent panel on exit
+    stop_agent_panel()
 
 if __name__ == "__main__":
     main()

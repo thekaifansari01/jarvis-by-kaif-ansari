@@ -22,6 +22,7 @@ from tools.open_any import APP_PATHS, WEB_URLS
 from tools.close_any import APP_PROCESS_NAMES
 from modules.executor import execute_single_tool_sync
 from modules.workspace import workspace
+from modules.agent_status import update_agent_status
 
 load_dotenv()
 
@@ -45,7 +46,7 @@ if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==================================================================================
-# ⚡ MASTER SYSTEM PROMPT (FAST BRAIN) - UPDATED WITH EPHEMERAL CONTEXT
+# ⚡ MASTER SYSTEM PROMPT (FAST BRAIN)
 # ==================================================================================
 SYSTEM_PROMPT = """
 You are Jarvis, an elite, highly responsive AI assistant created by Kaif Ansari (Mindly).
@@ -59,7 +60,7 @@ You may ONLY open files from the user's workspace (Creations/Vault/Temp).
 ### YOUR CAPABILITIES (JSON MAPPING)
 1. **APP CONTROLLER**: `apps_to_open`, `apps_to_close` (Local system apps).
 2. **URL OPENER**: `urls_to_open` (Direct HTTP/HTTPS links).
-3. **YOUTUBE PLAYER**: `youtube_play` (Direct song or video names).
+3. **YOUTUBE PLAYER**: `Youtube` (Direct song or video names).
 4. **WORKSPACE FILE OPENER**: `workspace_file_to_open` (Exact filename or fuzzy match, e.g., "report.md", "my_image.png").
 
 ### STRICT JSON OUTPUT SCHEMA
@@ -76,7 +77,7 @@ Return ONLY raw JSON. No markdown formatting.
 """
 
 # ==================================================================================
-# 🤖 AGENTIC LOOP PROMPT (GEMINI - MASTERMIND WITH ALL TOOLS) - WITH RENAME SUPPORT
+# 🤖 AGENTIC LOOP PROMPT
 # ==================================================================================
 AGENT_SYSTEM_PROMPT = """
 You are Jarvis, operating in Autonomous Agent Mode. You are a Mastermind AI with strict Goal-Oriented Focus.
@@ -122,7 +123,6 @@ def build_fast_brain_prompt(raw_command: str, context: str, search_results: str 
     memory_block = f"\n[USER CONTEXT / MEMORY / FILES]\n{context}\n" if context and context.strip() else ""
     history_block = f"\n[LAST CONVERSATION]\n{context_summary}\n" if context_summary and context_summary.strip() else "No recent conversation."
     
-    # Inject ephemeral data (last links, files from agent)
     ephemeral_block = ""
     if ephemeral:
         ephemeral_block = f"\n[RECENT AGENT OUTPUT (USE THESE FOR OPENING LINKS/FILES)]\n"
@@ -151,7 +151,7 @@ def clean_json_string(raw_text: str) -> str:
     return re.sub(r'^```json\n|```$', '', raw_text, flags=re.MULTILINE).strip()
 
 # ==================================================================================
-# FAST BRAIN (Groq) with Ephemeral Context
+# FAST BRAIN (Groq)
 # ==================================================================================
 def fetch_from_groq(raw_command: str, context: str, search_results: str = "", ephemeral: dict = None) -> Optional[Dict[str, any]]:
     if not groq_client: return None
@@ -173,7 +173,7 @@ def fetch_from_groq(raw_command: str, context: str, search_results: str = "", ep
         return None
 
 # ==================================================================================
-# AGENTIC LOOP (Google Gemini with DEEP NATIVE SCHEMA) - WITH dest_name SUPPORT
+# AGENTIC LOOP
 # ==================================================================================
 def summarize_scratchpad(scratchpad: str) -> str:
     if len(scratchpad) <= CONFIG.get("AGENT_SCRATCHPAD_MAX_CHARS", 8000): return scratchpad
@@ -193,32 +193,27 @@ def summarize_scratchpad(scratchpad: str) -> str:
 def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Dict[str, any]:
     logger.info(f"🤖 AGENTIC LOOP INITIATED (Gemini {AGENT_MODEL_GEMINI} - DEEP SCHEMA MODE)...")
     scratchpad = ""
-    max_steps = CONFIG.get("AGENT_MAX_STEPS", 10)  # Use config value
+    max_steps = CONFIG.get("AGENT_MAX_STEPS", 10)
     timeout_seconds = CONFIG.get("AGENT_TIMEOUT", 120)
     retry_limit = CONFIG.get("AGENT_RETRY_LIMIT", 2)
     step = 0
     start_time = time.time()
     
-    # Completed actions tracker to prevent duplicates
     completed_actions = set()
-    
-    # Ephemeral storage for links, files, etc.
     if memory_instance and not hasattr(memory_instance, 'ephemeral'):
         memory_instance.ephemeral = {}
     ephemeral = memory_instance.ephemeral if memory_instance else {}
 
-    # --- 🛡️ TOOL CONTRACT (UPDATED with dest_name) ---
+    # Tool schema
     agent_schema = types.Schema(
         type=types.Type.OBJECT,
         properties={
             "thought": types.Schema(type=types.Type.STRING, description="Step 1: Goal. Step 2: Scratchpad. Step 3: Next action."),
             "is_task_complete": types.Schema(type=types.Type.BOOLEAN, description="True ONLY if the ultimate goal is fully achieved."),
             "response": types.Schema(type=types.Type.STRING, description="Final natural response to speak to the user. (Only if is_task_complete is true)"),
-            
             "search_actions": types.Schema(type=types.Type.OBJECT, properties={
                 "web": types.Schema(type=types.Type.STRING, description="Search query string.")
             }),
-            
             "workspace_action": types.Schema(
                 type=types.Type.OBJECT,
                 properties={
@@ -229,7 +224,6 @@ def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Di
                     "dest_name": types.Schema(type=types.Type.STRING, description="OPTIONAL: New filename when moving (rename). Only used for 'move' action.")
                 }
             ),
-            
             "email_action": types.Schema(
                 type=types.Type.OBJECT,
                 properties={
@@ -246,7 +240,6 @@ def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Di
                     )
                 }
             ),
-            
             "whatsapp_action": types.Schema(
                 type=types.Type.OBJECT, 
                 properties={
@@ -255,14 +248,12 @@ def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Di
                     "file_path": types.Schema(type=types.Type.STRING, description="OPTIONAL: Exact filename to attach.")
                 }
             ),
-            
             "image_command": types.Schema(type=types.Type.OBJECT, properties={
                 "action": types.Schema(type=types.Type.STRING, description="Must be 'generate' or 'edit'"),
                 "prompt": types.Schema(type=types.Type.STRING),
                 "filename": types.Schema(type=types.Type.STRING),
                 "target_file": types.Schema(type=types.Type.STRING, description="For edit, original filename")
             }),
-
             "apps_to_open": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)),
             "apps_to_close": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)),
             "urls_to_open": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)),
@@ -275,6 +266,7 @@ def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Di
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
             logger.warning(f"⏰ Agent loop timeout after {elapsed:.1f} seconds")
+            update_agent_status(step=0, total_steps=max_steps, thought="Task timed out", action="")
             return make_result("Bhai, task thoda zyada time le raha tha, timeout ho gaya. Aap phir se try karo ya simple command do.", priority="high", agent_executed=True)
 
         logger.info(f"🔄 Agent Loop Step {step + 1}/{max_steps}")
@@ -284,9 +276,7 @@ def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Di
             scratchpad = summarize_scratchpad(scratchpad)
 
         panic_warning = f"⚠️ WARNING: You are running out of steps! Execute final action NOW." if step + 1 >= max_steps - 1 else ""
-        
         completed_list = "\n".join([f"- {act}" for act in completed_actions]) if completed_actions else "None yet."
-        
         ephemeral_prompt = ""
         if ephemeral.get("last_found_links"):
             ephemeral_prompt += f"\n[EPHEMERAL: Last found links = {ephemeral['last_found_links']}]"
@@ -316,6 +306,14 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
 """
 
         try:
+            # 🚀 NEW FIX: PRE-UPDATE AGENT STATUS FOR ZERO-DELAY UI 🚀
+            update_agent_status(
+                step=step+1,
+                total_steps=max_steps,
+                thought="Thinking...",
+                action="THINKING"
+            )
+
             ai_response = None
             if gemini_client:
                 panic_step = max_steps - 2
@@ -331,7 +329,6 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
                 )
                 ai_response = json.loads(clean_json_string(response.text))
             else:
-                # Fallback to Groq
                 panic_step = max_steps - 2
                 full_prompt = AGENT_SYSTEM_PROMPT.format(max_steps=max_steps, panic_step=panic_step)
                 completion = groq_client.chat.completions.create(
@@ -342,7 +339,14 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
                 )
                 ai_response = json.loads(clean_json_string(completion.choices[0].message.content.strip()))
             
+            # Actual thought update hone ke baad wapas likho
             logger.info(f"🧠 Agent Thought: {ai_response.get('thought', 'Thinking...')}")
+            update_agent_status(
+                step=step+1,
+                total_steps=max_steps,
+                thought=ai_response.get('thought', ''),
+                action=str(list(ai_response.keys())[0]) if ai_response else ''
+            )
 
             if ai_response.get("is_task_complete"):
                 logger.info("✅ Agent declared task complete!")
@@ -351,6 +355,8 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
                     ephemeral["last_found_links"] = ai_response["urls_to_open"]
                 if ai_response.get("image_command", {}).get("filename"):
                     ephemeral["last_generated_image"] = ai_response["image_command"]["filename"]
+                # 🔥 Task complete – set step=0 so panel hides after 1 sec
+                update_agent_status(step=0, total_steps=max_steps, thought="Task completed", action="")
                 return make_result(final_text, is_agentic=True, agent_executed=True, **ai_response)
 
             observation = None
@@ -371,6 +377,13 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
                     if observation and ("error" not in obs_prefix and "❌" not in obs_prefix and "failed" not in obs_prefix):
                         action_fingerprint = f"{list(ai_response.keys())[0]}:{str(ai_response.get(list(ai_response.keys())[0]))[:100]}"
                         completed_actions.add(action_fingerprint)
+                        update_agent_status(
+                            step=step+1,
+                            total_steps=max_steps,
+                            thought=ai_response.get('thought', ''),
+                            action=str(list(ai_response.keys())[0]) if ai_response else '',
+                            observation=observation[:200]
+                        )
                         break
                     elif attempt < retry_limit - 1:
                         logger.warning(f"⚠️ Tool attempt {attempt+1} failed: {observation}. Retrying in 2s...")
@@ -389,6 +402,7 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
             error_msg = str(e)
             if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
                 logger.error("❌ Gemini API Rate Limit (429) Hit!")
+                update_agent_status(step=0, total_steps=max_steps, thought="Rate limit exceeded", action="")
                 return make_result("Bhai, Google Gemini ki free API speed limit khatam ho gayi hai. 60 seconds ruko aur phir try karo.", priority="high", agent_executed=True)
             
             logger.error(f"❌ Agent Loop Error (API/Crash): {e}")
@@ -396,10 +410,11 @@ Based on the Scratchpad and Completed Actions, select the NEXT tool in the Nativ
             scratchpad += f"\n- System Error on Step {step+1}: {e}. Skipping this tool."
             step += 1
 
+    update_agent_status(step=0, total_steps=max_steps, thought="Max steps reached", action="")
     return make_result(f"Bhai, maine maximum steps ({max_steps}) le liye hain. Task loop limit tak pahunch gaya hai. Kripya simple command do.", priority="high", agent_executed=True)
 
 # ==================================================================================
-# 🚦 PURE AI ROUTER (ULTRA-SMART 2-TIER ROUTING)
+# 🚦 ROUTER
 # ==================================================================================
 def fetch_hybrid_response(raw_command: str, context: str, search_results: str = "", memory_instance=None) -> Optional[Dict[str, any]]:
     if not groq_client: return None
@@ -436,9 +451,7 @@ Reply strictly with ONLY ONE WORD: 'FAST' or 'AGENTIC'."""
             temperature=0.0,
             max_tokens=5
         )
-        
         decision = completion.choices[0].message.content.strip().upper()
-        
         if "AGENTIC" in decision:
             logger.info("🚦 Smart Router: AGENTIC (Deep Tasks & Comms)")
             return run_agentic_loop(raw_command, context, memory_instance)
@@ -446,7 +459,6 @@ Reply strictly with ONLY ONE WORD: 'FAST' or 'AGENTIC'."""
             logger.info("🚦 Smart Router: FAST (Direct Apps / Quick Chat / File Open)")
             ephemeral = memory_instance.ephemeral if memory_instance else None
             return fetch_from_groq(raw_command, context, search_results, ephemeral)
-            
     except Exception as e:
         logger.error(f"⚠️ Smart Router Error: {e}. Defaulting to Fast Brain.")
         return fetch_from_groq(raw_command, context, search_results)
@@ -456,7 +468,6 @@ Reply strictly with ONLY ONE WORD: 'FAST' or 'AGENTIC'."""
 # ==================================================================================
 def process_with_cohere(raw_command: str, context: str, search_results: str = "", memory_instance=None) -> Dict[str, any]:
     cmd_lower = raw_command.lower().strip()
-
     if ("time" in cmd_lower or "samay" in cmd_lower) and "what" in cmd_lower:
         msg = datetime.datetime.now().strftime("It's %I:%M %p, Sir.")
         speak(msg)
@@ -468,8 +479,8 @@ def process_with_cohere(raw_command: str, context: str, search_results: str = ""
 
     resolved_command = resolve_pronouns(raw_command)
     result = fetch_hybrid_response(resolved_command, context, search_results, memory_instance)
-
-    if not result: return make_result("Connection failed, Sir.", priority="low")
+    if not result:
+        return make_result("Connection failed, Sir.", priority="low")
 
     required_keys = ["response", "apps_to_open", "apps_to_close", "urls_to_open", "image_command",
                      "search_actions", "youtube_play", "gui_action", "email_action", "workspace_action",

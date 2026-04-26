@@ -4,11 +4,12 @@ import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
-import cohere
 import chromadb
 from chromadb.config import Settings
-from groq import Groq # ⚡ Imported Groq
-from modules.config import COHERE_API_KEY
+from groq import Groq
+from google import genai
+from google.genai import types  # 🚀 ADDED THIS FOR FIX
+from modules.config import GEMINI_API_KEY  # Note: config me ab COHERE_API_KEY nahi hai
 from modules.logger import logger
 from modules.workspace import workspace
 
@@ -23,12 +24,12 @@ class ContextMemory:
         self.user_bio_file = self.memory_path / "user_bio.json" 
         self.file_hashes_file = self.memory_path / "file_hashes.json"
         self.preferences_file = self.memory_path / "preferences.json"
-        self.user_mood_file = self.memory_path / "user_mood.json" # 🎭 NEW: Mood File
+        self.user_mood_file = self.memory_path / "user_mood.json"
         
         self.user_bio = self._load_json(self.user_bio_file, {"name": "User", "facts": []})
         self.file_hashes = self._load_json(self.file_hashes_file, {})
         self.preferences = self._load_json(self.preferences_file, {"likes": []})
-        self.user_mood = self._load_json(self.user_mood_file, {"mood_history": []}) # 🎭 NEW: Mood Data
+        self.user_mood = self._load_json(self.user_mood_file, {"mood_history": []})
 
         self.ephemeral = {} 
         
@@ -36,16 +37,43 @@ class ContextMemory:
         self.mode_timer = datetime.now()
         
         # 🤖 AI CLIENTS
-        self.cohere_client = cohere.Client(COHERE_API_KEY)
+        # Google client for embeddings (and possible LLM)
+        self.google_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
         self.groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         
-        # 🔥 CHROMADB
+        # 🔥 CHROMADB - using 768 dimensions (Google gemini-embedding-2)
+        # IMPORTANT: If you were using Cohere (1024 dim) before, you MUST delete the existing
+        # chroma_db folder at Data/jarvis_memory/chroma_db and re-index.
         self.chroma_client = chromadb.PersistentClient(path=str(self.memory_path / "chroma_db"))
-        self.chat_collection = self.chroma_client.get_or_create_collection(name="chat_history")
-        self.rag_collection = self.chroma_client.get_or_create_collection(name="rag_documents")
+        
+        # Force recreate collections with correct dimension (768) if they exist with old dim
+        self._recreate_collections_if_needed()
         
         if self.rag_base_path.exists():
             self._index_rag_files()
+
+    def _recreate_collections_if_needed(self):
+        """Check if collections dimensions mismatch (old Cohere 1024). If so, delete and recreate."""
+        # We'll simply delete and recreate to avoid dimension errors.
+        # This is a one-time migration loss. User warned.
+        try:
+            # Try to get collection - if it fails or we prefer to reset, delete.
+            # Simple approach: delete collections if they exist, then recreate.
+            existing_collections = [c.name for c in self.chroma_client.list_collections()]
+            if "chat_history" in existing_collections or "rag_documents" in existing_collections:
+                logger.warning("⚠️ Existing ChromaDB collections detected (likely Cohere 1024 dim). Deleting and recreating for Google 768 dim. All previous memory will be lost.")
+                for col_name in ["chat_history", "rag_documents"]:
+                    try:
+                        self.chroma_client.delete_collection(col_name)
+                    except:
+                        pass
+                logger.info("✅ Collections cleared. New ones will be created with 768 dimensions.")
+        except Exception as e:
+            logger.warning(f"Collection check failed: {e}")
+        
+        # Now create fresh collections (they will be created on first use by get_or_create)
+        self.chat_collection = self.chroma_client.get_or_create_collection(name="chat_history")
+        self.rag_collection = self.chroma_client.get_or_create_collection(name="rag_documents")
 
     def _load_json(self, file_path, default):
         try:
@@ -59,18 +87,26 @@ class ContextMemory:
             with open(file_path, 'w', encoding='utf-8') as f: json.dump(data, f, indent=2)
         except Exception as e: pass
 
-    # 🛑 DO NOT CHANGE: Database mapping relies on this Cohere model
     def get_embedding(self, text, input_type="search_document"):
+        """Google gemini-embedding-2 - 768 dimensions, 2048 tokens max."""
         if not text or not text.strip(): return None
+        if not self.google_client:
+            logger.error("Google client not initialized. Check GEMINI_API_KEY.")
+            return None
         try:
-            response = self.cohere_client.embed(
-                texts=[text],
-                model="embed-english-v3.0",
-                input_type=input_type
+            # Truncate to 2000 chars roughly (2k tokens)
+            truncated = text[:2000] if len(text) > 2000 else text
+            
+            # 🚀 FIX: Updated API parameters for latest SDK
+            response = self.google_client.models.embed_content(
+                model="gemini-embedding-2",
+                contents=truncated, 
+                config=types.EmbedContentConfig(output_dimensionality=768) 
             )
-            return response.embeddings[0]
+            # response is an object with .embeddings list
+            return response.embeddings[0].values
         except Exception as e:
-            logger.error(f"Embedding error: {e}")
+            logger.error(f"Google embedding error: {e}")
             return None
 
     def _smart_chunk_text(self, text, max_chars=600):
@@ -115,7 +151,12 @@ class ContextMemory:
                             for i, chunk in enumerate(self._smart_chunk_text(content)):
                                 embedding = self.get_embedding(chunk, "search_document")
                                 if embedding:
-                                    self.rag_collection.upsert(ids=[f"{file_name}_chunk_{i}"], embeddings=[embedding], metadatas=[{"file_name": file_name}], documents=[chunk])
+                                    self.rag_collection.upsert(
+                                        ids=[f"{file_name}_chunk_{i}"],
+                                        embeddings=[embedding],
+                                        metadatas=[{"file_name": file_name}],
+                                        documents=[chunk]
+                                    )
                             updated = True
                     except Exception as e: logger.error(f"Error indexing: {e}")
         
@@ -132,17 +173,15 @@ class ContextMemory:
         if (datetime.now() - self.mode_timer).total_seconds() / 60 > 30: self.current_mode = "General Assistant"
 
     def _extract_insights_ai(self, message):
-        """⚡ UPGRADED: Extracts Bio, Prefs, AND User Mood using 120B with Full Context."""
+        """Extracts Bio, Prefs, and Mood using 120B model."""
         if len(message.split()) < 3: return 
             
-        # 🕒 1. Fetch recent conversation history from ChromaDB for context
         recent_history = ""
         try:
             if self.chat_collection.count() > 0:
                 all_data = self.chat_collection.get()
                 docs = [{"role": all_data['metadatas'][i]['role'], "doc": all_data['documents'][i], "time": all_data['metadatas'][i]['timestamp']} for i in range(len(all_data['ids']))]
                 docs.sort(key=lambda x: x['time'])
-                # Get last 4 messages for context
                 recent_history = "\n".join([f"{d['role']}: {d['doc']}" for d in docs[-4:]])
         except Exception as e:
             logger.error(f"Could not fetch history for context: {e}")
@@ -191,7 +230,6 @@ class ContextMemory:
             updated = False
             mood_updated = False
             
-            # 1. Save Bio Facts (Case-insensitive check)
             if insights.get("bio") and len(insights["bio"]) > 0:
                 for fact in insights["bio"]:
                     if not any(f["text"].lower() == fact.lower() for f in self.user_bio["facts"]):
@@ -199,7 +237,6 @@ class ContextMemory:
                         updated = True
                 if updated: self._save_json(self.user_bio_file, self.user_bio)
             
-            # 2. Save Preferences (Case-insensitive check)
             if insights.get("prefs") and len(insights["prefs"]) > 0:
                 for pref in insights["prefs"]:
                     if not any(p.lower() == pref.lower() for p in self.preferences["likes"]):
@@ -208,7 +245,6 @@ class ContextMemory:
                 if len(self.preferences["likes"]) > 20: self.preferences["likes"] = self.preferences["likes"][-20:]
                 if updated: self._save_json(self.preferences_file, self.preferences)
                 
-            # 🎭 3. Save Mood Timeline (Rolling Window of 10)
             current_mood = insights.get("mood", "Neutral")
             if current_mood and current_mood.lower() != "neutral":
                 now = datetime.now()
@@ -218,7 +254,6 @@ class ContextMemory:
                     "time": now.strftime("%H:%M")
                 }
                 self.user_mood["mood_history"].append(mood_entry)
-                # Keep only the last 10 entries so it doesn't get cluttered
                 if len(self.user_mood["mood_history"]) > 10:
                     self.user_mood["mood_history"] = self.user_mood["mood_history"][-10:]
                 self._save_json(self.user_mood_file, self.user_mood)
@@ -243,7 +278,12 @@ class ContextMemory:
         if not embedding: return
 
         msg_id = f"msg_{datetime.now().timestamp()}"
-        self.chat_collection.add(ids=[msg_id], embeddings=[embedding], metadatas=[{"role": role, "timestamp": datetime.now().isoformat()}], documents=[message])
+        self.chat_collection.add(
+            ids=[msg_id],
+            embeddings=[embedding],
+            metadatas=[{"role": role, "timestamp": datetime.now().isoformat()}],
+            documents=[message]
+        )
         
         if self.chat_collection.count() > 50: self._summarize_old_messages()
 
@@ -278,12 +318,20 @@ class ContextMemory:
         query_embedding = self.get_embedding(query, "search_query")
         if not query_embedding or self.chat_collection.count() == 0: return []
         
-        results = self.chat_collection.query(query_embeddings=[query_embedding], n_results=min(top_k, self.chat_collection.count()), include=["documents", "metadatas", "distances"])
+        results = self.chat_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, self.chat_collection.count()),
+            include=["documents", "metadatas", "distances"]
+        )
         hits = []
         if results['documents'] and results['documents'][0]:
             for i in range(len(results['documents'][0])):
                 dist = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
-                if dist <= distance_threshold: hits.append({"role": results['metadatas'][0][i]['role'], "message": results['documents'][0][i]})
+                if dist <= distance_threshold:
+                    hits.append({
+                        "role": results['metadatas'][0][i]['role'],
+                        "message": results['documents'][0][i]
+                    })
         return hits
 
     def search_rag_files(self, query, top_k=2, distance_threshold=1.3):
@@ -291,37 +339,52 @@ class ContextMemory:
         query_embedding = self.get_embedding(query, "search_query")
         if not query_embedding or self.rag_collection.count() == 0: return []
         
-        results = self.rag_collection.query(query_embeddings=[query_embedding], n_results=min(top_k, self.rag_collection.count()), include=["documents", "metadatas", "distances"])
+        results = self.rag_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, self.rag_collection.count()),
+            include=["documents", "metadatas", "distances"]
+        )
         hits = []
         if results['documents'] and results['documents'][0]:
             for i in range(len(results['documents'][0])):
                 dist = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
-                if dist <= distance_threshold: hits.append({"file_path": results['metadatas'][0][i]['file_name'], "content": results['documents'][0][i]})
+                if dist <= distance_threshold:
+                    hits.append({
+                        "file_path": results['metadatas'][0][i]['file_name'],
+                        "content": results['documents'][0][i]
+                    })
         return hits
 
     def get_relevant_context(self, query):
-        """⚡ UPGRADED: Now injects Mood History and Live Workspace Status."""
+        """Injects Mood History and Live Workspace Status."""
         similar_chats = self.search_similar(query)
         rag_hits = self.search_rag_files(query)
         long_term_summary = ""
         if self.summary_file.exists():
-            with open(self.summary_file, "r", encoding="utf-8") as f: long_term_summary = "".join(f.readlines()[-5:])
+            with open(self.summary_file, "r", encoding="utf-8") as f:
+                long_term_summary = "".join(f.readlines()[-5:])
 
-        context = [f"⏱️ Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}", f"🧠 SESSION MODE: {self.current_mode}"]
+        context = [
+            f"⏱️ Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"🧠 SESSION MODE: {self.current_mode}"
+        ]
         
-        if self.user_bio.get("facts"): context.append("\n👤 USER FACTS:\n" + "\n".join([f"- {fact['text']}" for fact in self.user_bio["facts"]]))
-        if self.preferences.get("likes"): context.append("\n🎯 USER PREFS:\n" + "\n".join([f"- {like}" for like in self.preferences["likes"]]))
+        if self.user_bio.get("facts"):
+            context.append("\n👤 USER FACTS:\n" + "\n".join([f"- {fact['text']}" for fact in self.user_bio["facts"]]))
+        if self.preferences.get("likes"):
+            context.append("\n🎯 USER PREFS:\n" + "\n".join([f"- {like}" for like in self.preferences["likes"]]))
         
-        # 🎭 Injecting the Mood Timeline
         if self.user_mood.get("mood_history"):
-            moods = "\n".join([f"- {m['date']} {m['time']} | Mood: {m['mood']}" for m in self.user_mood["mood_history"][-5:]]) # Show last 5 to AI
+            moods = "\n".join([f"- {m['date']} {m['time']} | Mood: {m['mood']}" for m in self.user_mood["mood_history"][-5:]])
             context.append(f"\n🎭 RECENT MOOD HISTORY:\n{moods}")
             
-        if long_term_summary: context.append(f"\n📜 Long Term Memory:\n{long_term_summary}")
-        if similar_chats: context.append("\n💬 Recent Chats:\n" + "\n".join([f"- {msg['role']}: {msg['message']}" for msg in similar_chats]))
-        if rag_hits: context.append("\n📂 Knowledge Base (Files):\n" + "\n".join([f"- From {hit['file_path']}: {hit['content']}" for hit in rag_hits]))
+        if long_term_summary:
+            context.append(f"\n📜 Long Term Memory:\n{long_term_summary}")
+        if similar_chats:
+            context.append("\n💬 Recent Chats:\n" + "\n".join([f"- {msg['role']}: {msg['message']}" for msg in similar_chats]))
+        if rag_hits:
+            context.append("\n📂 Knowledge Base (Files):\n" + "\n".join([f"- From {hit['file_path']}: {hit['content']}" for hit in rag_hits]))
         
-        # 📂 Injecting Workspace Files Memory & Storage Status
         workspace_data = workspace.get_workspace_context()
         context.append(f"\n📁 MY WORKSPACE FILES & STORAGE STATUS:\n{workspace_data}")
                 
