@@ -51,7 +51,7 @@ def smart_file_finder(requested_name):
     if req_clean in clean_map:
         return clean_map[req_clean]
 
-    # 6. Aakhiri hathyaar: FUZZY MATCH (Agar thodi bohot spelling mistake ho)
+    # 6. Aakhiri hathyaar: FUZZY MATCH
     matches = difflib.get_close_matches(req_clean, clean_map.keys(), n=1, cutoff=0.4)
     if matches:
         logger.info(f"🔍 Smart Finder: '{requested_name}' matched with '{clean_map[matches[0]].name}'")
@@ -60,7 +60,7 @@ def smart_file_finder(requested_name):
     return None
 
 # ==================================================================================
-# ⚡ THE ORIGINAL ASYNC EXECUTOR (For Fast Brain)
+# ⚡ ASYNC EXECUTOR (For Fast Brain)
 # ==================================================================================
 def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str:
     """Execute actions based on processed command result and return search results if any."""
@@ -70,18 +70,18 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
 
     search_results = ""
     
-    # 🗣️ 1. TTS Feedback & Terminal Print (Ye hamesha chalega, chahe Fast ho ya Agent)
+    # 🗣️ TTS Feedback & Terminal Print
     response_text = result.get('response', '')
     if response_text:
         log_action(f"🤖 JARVIS: {response_text}")
         executor.submit(speak, response_text)
 
-    # 🔧 FIX: Agar agent already execute kar chuka hai toh duplicate execution skip karo
+    # Agent already executed? Skip duplicate
     if result.get("agent_executed"):
         logger.debug("🤖 Agent tool execution complete. Skipping duplicate async execution.")
         return ""
 
-    # 🎵 2. YOUTUBE PLAYER
+    # 🎵 YouTube Player
     youtube_query = result.get('youtube_play')
     if youtube_query:
         def play_on_youtube(query):
@@ -90,7 +90,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
             except Exception as e: log_action(f"❌ Failed to play on YouTube: {e}")
         executor.submit(play_on_youtube, youtube_query)
 
-    # 💻 3. System Actions (Apps & URLs)
+    # 💻 System Actions (Apps & URLs)
     if result.get('apps_to_open'):
         def thread_open(apps):
             opened = open_any_app(apps)
@@ -112,7 +112,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     except Exception as e: log_action(f"❌ Failed to open link: {e}")
         executor.submit(thread_open_urls, result['urls_to_open'])
 
-    # 🎨 4. HYBRID IMAGE GENERATION & EDITING
+    # 🎨 Image Generation & Editing
     image_cmd = result.get('image_command')
     if image_cmd and isinstance(image_cmd, dict) and image_cmd.get('action'):
         action = image_cmd.get('action', 'generate')
@@ -123,7 +123,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
             log_action(f"🖼️ Image Action: {action.upper()} | Prompt: {prompt}")
             executor.submit(handle_image_command, action, prompt, filename, target_file)
             
-    # 📁 5. WORKSPACE MANAGER (🚀 WITH 3-ROOM MOVEMENT & SMART FILE FINDER)
+    # 📁 Workspace Manager (with rename support)
     workspace_cmd = result.get('workspace_action')
     if workspace_cmd and isinstance(workspace_cmd, dict) and workspace_cmd.get('action'):
         act = workspace_cmd.get('action')
@@ -133,7 +133,6 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
             if not fname: return None
             fname = fname.strip("/\\")
             
-            # 🔍 Use Smart File Finder for fuzzy matching voice commands
             file_path = smart_file_finder(fname)
             
             if not file_path and action_type not in ["write", "list"]:
@@ -158,20 +157,26 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     
                 elif action_type == "move":
                     dest_folder_name = workspace_cmd.get('to', 'Vault').capitalize()
-                    if dest_folder_name not in ["Vault", "Creations", "Temp"]: dest_folder_name = "Vault"
-                        
+                    if dest_folder_name not in ["Vault", "Creations", "Temp"]:
+                        dest_folder_name = "Vault"
                     dest_dir = getattr(workspace, f"{dest_folder_name.lower()}_dir", workspace.vault_dir)
-                    base_name, ext = os.path.splitext(file_path.name)
-                    counter = 1
-                    safe_name = file_path.name
-                    while (dest_dir / safe_name).exists():
-                        safe_name = f"{base_name} ({counter}){ext}"
-                        counter += 1
-                        
-                    dest_path = dest_dir / safe_name
+                    
+                    # 🆕 Support dest_name for rename
+                    dest_name = workspace_cmd.get('dest_name', '')
+                    if not dest_name:
+                        dest_name = file_path.name
+                    
+                    dest_path = dest_dir / dest_name
+                    
+                    if dest_path.exists():
+                        msg = f"❌ Move failed: '{dest_name}' already exists in {dest_folder_name}. Please use a different dest_name or delete existing file."
+                        log_action(msg)
+                        executor.submit(speak, f"Bhai, {dest_folder_name} folder mein '{dest_name}' pehle se hai.")
+                        return msg
+                    
                     shutil.move(str(file_path), str(dest_path))
-                    log_action(f"📦 Moved {file_path.name} to {dest_folder_name} as {safe_name}")
-                    workspace.add_file_record(safe_name, dest_folder_name, f"Moved by Jarvis from {file_path.parent.name}")
+                    log_action(f"📦 Moved {file_path.name} to {dest_folder_name} as {dest_name}")
+                    workspace.add_file_record(dest_name, dest_folder_name, f"Moved by Jarvis from {file_path.parent.name}")
                     workspace.sync_registry()
                     executor.submit(speak, f"Bhai, maine file ko {dest_folder_name} mein move kar diya hai.")
                     return None
@@ -180,9 +185,9 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     log_action(f"📖 Reading workspace file: {file_path.name}")
                     if file_path.name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.pdf', '.exe')):
                         return f"❌ Error: Cannot read binary file '{file_path.name}'."
-                    with open(file_path, "r", encoding="utf-8") as f: return f"📁 File Content ({file_path.name}):\n{f.read()[:5000]}"
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        return f"📁 File Content ({file_path.name}):\n{f.read()[:5000]}"
                 
-                # Write in Fast Brain just in case
                 elif action_type == "write":
                     content = workspace_cmd.get('content', '')
                     target_dir = workspace.creations_dir
@@ -204,7 +209,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
         else:
             executor.submit(manage_workspace, act, target_file)
     
-    # 📂 5b. FAST BRAIN WORKSPACE FILE OPEN (Direct file open from Fast Brain)
+    # Fast Brain Workspace File Open
     workspace_file_to_open = result.get('workspace_file_to_open')
     if workspace_file_to_open and isinstance(workspace_file_to_open, str) and workspace_file_to_open.strip():
         def open_workspace_file_fast(filename):
@@ -227,7 +232,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                 executor.submit(speak, f"Sir, '{filename}' workspace mein nahi mili.")
         executor.submit(open_workspace_file_fast, workspace_file_to_open.strip())
 
-    # 🖱️ 6. GUI Actions
+    # GUI Actions
     gui_actions = result.get('gui_action', [])
     if isinstance(gui_actions, dict): gui_actions = [gui_actions]
     if gui_actions:
@@ -238,7 +243,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
                     if gui_response: log_action(gui_response)
         executor.submit(thread_gui, gui_actions)
 
-    # 📧 7. EMAIL BLOCK (with smart discovery)
+    # Email
     email_action = result.get('email_action', {})
     if email_action and isinstance(email_action, dict) and email_action.get('action_type') == "send":
         params = email_action.get('params', {})
@@ -267,7 +272,7 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
             if success: log_action("✅ Email sent successfully.")
         executor.submit(thread_email)
 
-    # 📱 8. WHATSAPP BLOCK (with smart discovery)
+    # WhatsApp
     whatsapp_action = result.get('whatsapp_action', {})
     if whatsapp_action and isinstance(whatsapp_action, dict) and whatsapp_action.get('to'):
         to_name = whatsapp_action.get('to')
@@ -290,18 +295,16 @@ def execute_actions(result: Dict[str, any], executor: ThreadPoolExecutor) -> str
     return search_results
 
 # ==================================================================================
-# 🤖 SYNCHRONOUS EXECUTOR (For AutoGPT Agentic Loop) - WITH ADVANCED ERROR FEEDBACK
+# 🤖 SYNCHRONOUS EXECUTOR (For Agentic Loop) - with rename support
 # ==================================================================================
 def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
     """
     Executes a single tool synchronously and returns the Observation string.
-    Upgraded to provide hints and tips to the Agent if an action fails.
+    Supports 'dest_name' for rename during move.
     """
     observation = "Observation: No valid action executed."
 
-    # ============================================================
     # 1. SEARCH ACTION
-    # ============================================================
     search_actions = action_dict.get('search_actions')
     if search_actions and isinstance(search_actions, dict) and any(search_actions.values()):
         try:
@@ -314,9 +317,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         except Exception as e:
             return f"Observation: Search API failed -> {e}"
 
-    # ============================================================
     # 2. WORKSPACE ACTION (Read/Open/Delete/Move/List/Write)
-    # ============================================================
     workspace_cmd = action_dict.get('workspace_action')
     if workspace_cmd and isinstance(workspace_cmd, dict) and workspace_cmd.get('action'):
         act = workspace_cmd.get('action')
@@ -387,18 +388,21 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
                     dest_folder = "Vault"
                 dest_dir = getattr(workspace, f"{dest_folder.lower()}_dir", workspace.vault_dir)
                 
-                base_name, ext = os.path.splitext(file_path.name)
-                counter = 1
-                safe_name = file_path.name
-                while (dest_dir / safe_name).exists():
-                    safe_name = f"{base_name} ({counter}){ext}"
-                    counter += 1
+                # 🆕 Support dest_name for rename
+                dest_name = workspace_cmd.get('dest_name', '')
+                if not dest_name:
+                    dest_name = file_path.name
                 
-                dest_path = dest_dir / safe_name
+                dest_path = dest_dir / dest_name
+                
+                # Check conflict
+                if dest_path.exists():
+                    return f"Observation: Move FAILED. File '{dest_name}' already exists in {dest_folder}. Please use a different dest_name or delete the existing file first."
+                
                 shutil.move(str(file_path), str(dest_path))
-                workspace.add_file_record(safe_name, dest_folder, f"Moved by Agent from {file_path.parent.name}")
+                workspace.add_file_record(dest_name, dest_folder, f"Moved by Agent from {file_path.parent.name}")
                 workspace.sync_registry()
-                return f"Observation: Successfully moved '{file_path.name}' to {dest_folder} as '{safe_name}'."
+                return f"Observation: Successfully moved '{file_path.name}' to {dest_folder} as '{dest_name}'."
             
             else:
                 return f"Observation: Workspace action '{act}' not supported."
@@ -406,9 +410,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         except Exception as e:
             return f"Observation: Workspace action failed -> {e}"
 
-    # ============================================================
     # 3. EMAIL ACTION 
-    # ============================================================
     email_action = action_dict.get('email_action', {})
     if email_action and isinstance(email_action, dict) and email_action.get('action_type') == "send":
         params = email_action.get('params', {})
@@ -439,9 +441,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
             return f"Observation: Email successfully sent to {requested_to}."
         return f"Observation: Failed to send email to {requested_to}. Check if SMTP or credentials are correct."
 
-    # ============================================================
     # 4. WHATSAPP ACTION
-    # ============================================================
     whatsapp_action = action_dict.get('whatsapp_action', {})
     if whatsapp_action and isinstance(whatsapp_action, dict) and whatsapp_action.get('to'):
         to_name = whatsapp_action.get('to')
@@ -460,9 +460,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         wa_result = send_whatsapp_message(to_name, msg_body, attachment_abs_path)
         return f"Observation: {wa_result}"
 
-    # ============================================================
     # 5. APP OPEN/CLOSE
-    # ============================================================
     apps_to_open = action_dict.get('apps_to_open')
     if apps_to_open and isinstance(apps_to_open, list) and apps_to_open:
         try:
@@ -485,9 +483,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         except Exception as e:
             return f"Observation: Error closing apps -> {e}"
 
-    # ============================================================
     # 6. YOUTUBE PLAYBACK
-    # ============================================================
     youtube_query = action_dict.get('youtube_play')
     if youtube_query and isinstance(youtube_query, str) and youtube_query.strip():
         try:
@@ -498,9 +494,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         except Exception as e:
             return f"Observation: YouTube error -> {e}"
 
-    # ============================================================
     # 7. IMAGE GENERATION/EDITING
-    # ============================================================
     image_cmd = action_dict.get('image_command')
     if image_cmd and isinstance(image_cmd, dict) and image_cmd.get('action'):
         try:
@@ -521,9 +515,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
         except Exception as e:
             return f"Observation: Image error -> {e}"
 
-    # ============================================================
     # 8. GUI ACTIONS
-    # ============================================================
     gui_actions = action_dict.get('gui_action')
     if gui_actions:
         if isinstance(gui_actions, dict):
@@ -539,9 +531,7 @@ def execute_single_tool_sync(action_dict: Dict[str, any]) -> str:
             except Exception as e:
                 return f"Observation: GUI error -> {e}"
 
-    # ============================================================
     # 9. OPEN URLS
-    # ============================================================
     urls_to_open = action_dict.get('urls_to_open')
     if urls_to_open and isinstance(urls_to_open, list) and urls_to_open:
         try:

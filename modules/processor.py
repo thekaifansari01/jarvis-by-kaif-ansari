@@ -40,13 +40,12 @@ ALL_CLOSE_OPTIONS = list(APP_PROCESS_NAMES.keys())
 
 # --- INIT CLIENTS ---
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
 gemini_client = None
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==================================================================================
-# ⚡ MASTER SYSTEM PROMPT (FAST BRAIN) - UPDATED WITH WORKSPACE FILE OPEN
+# ⚡ MASTER SYSTEM PROMPT (FAST BRAIN) - UPDATED WITH EPHEMERAL CONTEXT
 # ==================================================================================
 SYSTEM_PROMPT = """
 You are Jarvis, an elite, highly responsive AI assistant created by Kaif Ansari (Mindly).
@@ -77,28 +76,34 @@ Return ONLY raw JSON. No markdown formatting.
 """
 
 # ==================================================================================
-# 🤖 AGENTIC LOOP PROMPT (GEMINI - MASTERMIND WITH ALL TOOLS) - UPDATED WITH OPEN
+# 🤖 AGENTIC LOOP PROMPT (GEMINI - MASTERMIND WITH ALL TOOLS) - WITH RENAME SUPPORT
 # ==================================================================================
 AGENT_SYSTEM_PROMPT = """
 You are Jarvis, operating in Autonomous Agent Mode. You are a Mastermind AI with strict Goal-Oriented Focus.
 
 ### 🎯 GOAL-ORIENTED THINKING (ReAct Framework)
-Always start your reasoning by explicitly stating the User's Ultimate Goal. Compare this Goal with the Scratchpad to see what is missing. 
+Always start your reasoning by explicitly stating the User's Ultimate Goal. Compare this Goal with the Scratchpad and the COMPLETED ACTIONS list to see what is missing. 
 Your `thought` field MUST follow this exact structure (in Hinglish):
-"Step 1: Mera ultimate GOAL hai [State Goal]. Step 2: Scratchpad ke hisaab se maine [State what is done]. Step 3: Isliye mera NEXT step hai [State Next Action]."
+"Step 1: Mera ultimate GOAL hai [State Goal]. Step 2: Scratchpad aur Completed Actions ke hisaab se maine [State what is done]. Step 3: Isliye mera NEXT step hai [State Next Action]."
 
-### 🛠️ STRICT TOOL USAGE GUIDE (CRITICAL)
+### 🛑 ANTI-DUPLICATION RULE (CRITICAL)
+- Before calling any tool, check the [COMPLETED ACTIONS] list below.
+- If you have already performed the exact same action (e.g., sent email to Kaif with same attachment, or wrote the same file), DO NOT repeat it.
+- If the goal is already achieved based on completed actions, set `is_task_complete: true` immediately.
+
+### 🛠️ STRICT TOOL USAGE GUIDE (CRITICAL) - WITH RENAME
 1. **Emailing (`email_action`)**: If you need to attach a file, you MUST put the exact filename inside the `file_path` string (e.g., "report.md"). 
 2. **WhatsApp (`whatsapp_action`)**: If you need to attach a file, put the filename inside `file_path` string.
 3. **Workspace (`workspace_action`)**: 
    - Use actions: 'read', 'write', 'move', 'list', or 'open'.
    - 'open' will launch the file with its default application (images, PDFs, text files, etc.).
    - Always populate 'file' field with the exact filename.
+   - For **rename during move**: use action 'move', provide 'file' (source), 'to' (target folder), and **'dest_name'** (new filename). If dest_name is omitted, filename stays same.
 4. **Image Generation/Editing (`image_command`)**: Use 'generate' or 'edit'.
 
 ### ⏱️ BUDGET-AWARE PLANNING
-- You have a strict limit of 10 Steps. Check the [BUDGET TRACKER].
-- If you reach Step 8 or 9 (PANIC MODE): Stop gathering new information. Synthesize data, execute final action, and set `is_task_complete: true`.
+- You have a strict limit of {max_steps} Steps. Check the [BUDGET TRACKER].
+- If you reach Step {panic_step} or higher (PANIC MODE): Stop gathering new information. Synthesize data, execute final action, and set `is_task_complete: true`.
 
 ### 🚫 ANTI-SHORTCUT RULE
 NEVER assume an action was successful until you read the "Observation:" in the Scratchpad. Do not repeat failed actions.
@@ -110,20 +115,32 @@ Return ONLY raw JSON matching the required Native Schema. DO NOT output free-tex
 # ==================================================================================
 # PROMPT BUILDERS
 # ==================================================================================
-def build_fast_brain_prompt(raw_command: str, context: str, search_results: str = "") -> str:
+def build_fast_brain_prompt(raw_command: str, context: str, search_results: str = "", ephemeral: dict = None) -> str:
     available_apps = ALL_OPEN_OPTIONS
     context_summary = generate_context_summary()
     current_time = datetime.datetime.now().strftime('%A, %d %B %Y | %I:%M %p')
     memory_block = f"\n[USER CONTEXT / MEMORY / FILES]\n{context}\n" if context and context.strip() else ""
     history_block = f"\n[LAST CONVERSATION]\n{context_summary}\n" if context_summary and context_summary.strip() else "No recent conversation."
-    return f"""[SYSTEM STATUS]\nTime: {current_time}\n[AVAILABLE APPS]\n{", ".join(available_apps[:50])}...\n{history_block}{memory_block}\n[USER COMMAND]\n"{raw_command}"\nReturn STRICT JSON."""
+    
+    # Inject ephemeral data (last links, files from agent)
+    ephemeral_block = ""
+    if ephemeral:
+        ephemeral_block = f"\n[RECENT AGENT OUTPUT (USE THESE FOR OPENING LINKS/FILES)]\n"
+        if ephemeral.get("last_found_links"):
+            ephemeral_block += f"Links found earlier: {', '.join(ephemeral['last_found_links'])}\n"
+        if ephemeral.get("last_generated_image"):
+            ephemeral_block += f"Last generated image: {ephemeral['last_generated_image']}\n"
+        if ephemeral.get("last_accessed_file"):
+            ephemeral_block += f"Last file accessed: {ephemeral['last_accessed_file']}\n"
+    
+    return f"""[SYSTEM STATUS]\nTime: {current_time}\n[AVAILABLE APPS]\n{", ".join(available_apps[:50])}...\n{history_block}{memory_block}{ephemeral_block}\n[USER COMMAND]\n"{raw_command}"\nReturn STRICT JSON."""
 
 def make_result(response, **kwargs):
     base = {
         "response": response, "apps_to_open": [], "apps_to_close": [], "urls_to_open": [],
         "image_command": {}, "search_actions": {}, "youtube_play": "", "gui_action": [],
         "email_action": {}, "workspace_action": {}, "whatsapp_action": {}, "priority": "high",
-        "workspace_file_to_open": ""  # NEW FIELD FOR FAST BRAIN
+        "workspace_file_to_open": ""
     }
     base.update(kwargs)
     return base
@@ -134,13 +151,13 @@ def clean_json_string(raw_text: str) -> str:
     return re.sub(r'^```json\n|```$', '', raw_text, flags=re.MULTILINE).strip()
 
 # ==================================================================================
-# FAST BRAIN (Groq)
+# FAST BRAIN (Groq) with Ephemeral Context
 # ==================================================================================
-def fetch_from_groq(raw_command: str, context: str, search_results: str = "") -> Optional[Dict[str, any]]:
+def fetch_from_groq(raw_command: str, context: str, search_results: str = "", ephemeral: dict = None) -> Optional[Dict[str, any]]:
     if not groq_client: return None
     logger.info("⚡ Routing to Fast Brain (Groq Llama-3.3-70B)")
     try:
-        dynamic_prompt = build_fast_brain_prompt(raw_command, context, search_results)
+        dynamic_prompt = build_fast_brain_prompt(raw_command, context, search_results, ephemeral)
         completion = groq_client.chat.completions.create(
             model=FAST_MODEL,
             messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": dynamic_prompt}],
@@ -148,7 +165,6 @@ def fetch_from_groq(raw_command: str, context: str, search_results: str = "") ->
             response_format={"type": "json_object"}
         )
         result = json.loads(clean_json_string(completion.choices[0].message.content.strip()))
-        # Ensure workspace_file_to_open exists
         if "workspace_file_to_open" not in result:
             result["workspace_file_to_open"] = ""
         return result
@@ -157,7 +173,7 @@ def fetch_from_groq(raw_command: str, context: str, search_results: str = "") ->
         return None
 
 # ==================================================================================
-# AGENTIC LOOP (Google Gemini with DEEP NATIVE SCHEMA)
+# AGENTIC LOOP (Google Gemini with DEEP NATIVE SCHEMA) - WITH dest_name SUPPORT
 # ==================================================================================
 def summarize_scratchpad(scratchpad: str) -> str:
     if len(scratchpad) <= CONFIG.get("AGENT_SCRATCHPAD_MAX_CHARS", 8000): return scratchpad
@@ -174,16 +190,24 @@ def summarize_scratchpad(scratchpad: str) -> str:
     except:
         return scratchpad[-CONFIG.get("AGENT_SCRATCHPAD_MAX_CHARS", 8000):]
 
-def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
+def run_agentic_loop(raw_command: str, context: str, memory_instance=None) -> Dict[str, any]:
     logger.info(f"🤖 AGENTIC LOOP INITIATED (Gemini {AGENT_MODEL_GEMINI} - DEEP SCHEMA MODE)...")
     scratchpad = ""
-    max_steps = 10  
-    timeout_seconds = CONFIG.get("AGENT_TIMEOUT", 120) 
+    max_steps = CONFIG.get("AGENT_MAX_STEPS", 10)  # Use config value
+    timeout_seconds = CONFIG.get("AGENT_TIMEOUT", 120)
     retry_limit = CONFIG.get("AGENT_RETRY_LIMIT", 2)
     step = 0
     start_time = time.time()
+    
+    # Completed actions tracker to prevent duplicates
+    completed_actions = set()
+    
+    # Ephemeral storage for links, files, etc.
+    if memory_instance and not hasattr(memory_instance, 'ephemeral'):
+        memory_instance.ephemeral = {}
+    ephemeral = memory_instance.ephemeral if memory_instance else {}
 
-    # --- 🛡️ THE ULTIMATE TOOL CONTRACT (UPDATED WITH 'open' ACTION) ---
+    # --- 🛡️ TOOL CONTRACT (UPDATED with dest_name) ---
     agent_schema = types.Schema(
         type=types.Type.OBJECT,
         properties={
@@ -201,7 +225,8 @@ def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
                     "action": types.Schema(type=types.Type.STRING, description="Must be exactly: 'read', 'write', 'move', 'list', or 'open'"),
                     "file": types.Schema(type=types.Type.STRING, description="Exact filename with extension (e.g., 'report.md')"),
                     "content": types.Schema(type=types.Type.STRING, description="Full file content if action is 'write'"),
-                    "to": types.Schema(type=types.Type.STRING, description="Target folder name if action is 'move' (e.g., 'Vault')")
+                    "to": types.Schema(type=types.Type.STRING, description="Target folder name if action is 'move' (e.g., 'Vault')"),
+                    "dest_name": types.Schema(type=types.Type.STRING, description="OPTIONAL: New filename when moving (rename). Only used for 'move' action.")
                 }
             ),
             
@@ -215,7 +240,7 @@ def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
                             "to": types.Schema(type=types.Type.STRING, description="Recipient name or email"),
                             "subject": types.Schema(type=types.Type.STRING),
                             "body": types.Schema(type=types.Type.STRING),
-                            "file_path": types.Schema(type=types.Type.STRING, description="MANDATORY IF ATTACHING: Exact filename to attach (e.g. 'Battery_Tech.md'). MUST be a String.")
+                            "file_path": types.Schema(type=types.Type.STRING, description="MANDATORY IF ATTACHING: Exact filename")
                         },
                         required=["to", "subject", "body"]
                     )
@@ -227,14 +252,15 @@ def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
                 properties={
                     "to": types.Schema(type=types.Type.STRING, description="Contact name"),
                     "message": types.Schema(type=types.Type.STRING, description="Text message to send"),
-                    "file_path": types.Schema(type=types.Type.STRING, description="OPTIONAL: Exact filename to attach. MUST be a String.")
+                    "file_path": types.Schema(type=types.Type.STRING, description="OPTIONAL: Exact filename to attach.")
                 }
             ),
             
             "image_command": types.Schema(type=types.Type.OBJECT, properties={
-                "action": types.Schema(type=types.Type.STRING, description="Must be 'generate'"),
-                "prompt": types.Schema(type=types.Type.STRING, description="Image generation prompt"),
-                "filename": types.Schema(type=types.Type.STRING, description="Save as filename")
+                "action": types.Schema(type=types.Type.STRING, description="Must be 'generate' or 'edit'"),
+                "prompt": types.Schema(type=types.Type.STRING),
+                "filename": types.Schema(type=types.Type.STRING),
+                "target_file": types.Schema(type=types.Type.STRING, description="For edit, original filename")
             }),
 
             "apps_to_open": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)),
@@ -249,7 +275,7 @@ def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
             logger.warning(f"⏰ Agent loop timeout after {elapsed:.1f} seconds")
-            return make_result("Bhai, task thoda zyada time le raha tha, timeout ho gaya.", priority="high", agent_executed=True)
+            return make_result("Bhai, task thoda zyada time le raha tha, timeout ho gaya. Aap phir se try karo ya simple command do.", priority="high", agent_executed=True)
 
         logger.info(f"🔄 Agent Loop Step {step + 1}/{max_steps}")
         current_time = datetime.datetime.now().strftime('%A, %d %B %Y | %I:%M %p')
@@ -257,26 +283,43 @@ def run_agentic_loop(raw_command: str, context: str) -> Dict[str, any]:
         if scratchpad and len(scratchpad) > CONFIG.get("AGENT_SCRATCHPAD_MAX_CHARS", 8000):
             scratchpad = summarize_scratchpad(scratchpad)
 
-        current_step_context = context if step == 0 else "[Context loaded in Step 1. Focus on Goal and Scratchpad.]"
-        panic_warning = "⚠️ WARNING: You are running out of steps! Execute final action NOW." if step + 1 >= max_steps - 1 else ""
+        panic_warning = f"⚠️ WARNING: You are running out of steps! Execute final action NOW." if step + 1 >= max_steps - 1 else ""
+        
+        completed_list = "\n".join([f"- {act}" for act in completed_actions]) if completed_actions else "None yet."
+        
+        ephemeral_prompt = ""
+        if ephemeral.get("last_found_links"):
+            ephemeral_prompt += f"\n[EPHEMERAL: Last found links = {ephemeral['last_found_links']}]"
+        if ephemeral.get("last_generated_image"):
+            ephemeral_prompt += f"\n[EPHEMERAL: Last generated image = {ephemeral['last_generated_image']}]"
 
         prompt = f"""[SYSTEM STATUS]
 Time: {current_time}
 [BUDGET TRACKER]
 Current Step: {step + 1} out of {max_steps}. {panic_warning}
+
+[COMPLETED ACTIONS (DO NOT REPEAT)]
+{completed_list}
+
 [MEMORY & CONTEXT]
-{current_step_context}
+{context if step == 0 else "[Context loaded in Step 1. Focus on Goal and Scratchpad.]"}
+
 [ORIGINAL COMMAND]
 {raw_command}
+
 [SCRATCHPAD]
 {scratchpad if scratchpad else "No actions taken yet."}
 
-Based on the Scratchpad, select and fill the correct tool in the Native JSON Schema."""
+{ephemeral_prompt}
+
+Based on the Scratchpad and Completed Actions, select the NEXT tool in the Native JSON Schema. If goal achieved, set is_task_complete=true.
+"""
 
         try:
             ai_response = None
             if gemini_client:
-                full_prompt = AGENT_SYSTEM_PROMPT + "\n\n" + prompt
+                panic_step = max_steps - 2
+                full_prompt = AGENT_SYSTEM_PROMPT.format(max_steps=max_steps, panic_step=panic_step) + "\n\n" + prompt
                 response = gemini_client.models.generate_content(
                     model=AGENT_MODEL_GEMINI,
                     contents=full_prompt,
@@ -288,9 +331,12 @@ Based on the Scratchpad, select and fill the correct tool in the Native JSON Sch
                 )
                 ai_response = json.loads(clean_json_string(response.text))
             else:
+                # Fallback to Groq
+                panic_step = max_steps - 2
+                full_prompt = AGENT_SYSTEM_PROMPT.format(max_steps=max_steps, panic_step=panic_step)
                 completion = groq_client.chat.completions.create(
                     model=FAST_MODEL,
-                    messages=[{"role": "system", "content": AGENT_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+                    messages=[{"role": "system", "content": full_prompt}, {"role": "user", "content": prompt}],
                     temperature=0.2,
                     response_format={"type": "json_object"}
                 )
@@ -301,14 +347,30 @@ Based on the Scratchpad, select and fill the correct tool in the Native JSON Sch
             if ai_response.get("is_task_complete"):
                 logger.info("✅ Agent declared task complete!")
                 final_text = ai_response.pop("response", "Task completed sir.")
+                if ai_response.get("urls_to_open"):
+                    ephemeral["last_found_links"] = ai_response["urls_to_open"]
+                if ai_response.get("image_command", {}).get("filename"):
+                    ephemeral["last_generated_image"] = ai_response["image_command"]["filename"]
                 return make_result(final_text, is_agentic=True, agent_executed=True, **ai_response)
 
             observation = None
             for attempt in range(retry_limit):
                 try:
                     observation = execute_single_tool_sync(ai_response)
+                    if observation:
+                        if "http" in observation and "link" in observation.lower():
+                            urls = re.findall(r'https?://[^\s]+', observation)
+                            if urls:
+                                ephemeral["last_found_links"] = urls[:3]
+                        if "file" in observation.lower() and (".png" in observation or ".md" in observation):
+                            file_match = re.search(r'([\w\-]+\.(png|md|txt|jpg))', observation)
+                            if file_match:
+                                ephemeral["last_accessed_file"] = file_match.group(1)
+                    
                     obs_prefix = str(observation).lower()[:50]
                     if observation and ("error" not in obs_prefix and "❌" not in obs_prefix and "failed" not in obs_prefix):
+                        action_fingerprint = f"{list(ai_response.keys())[0]}:{str(ai_response.get(list(ai_response.keys())[0]))[:100]}"
+                        completed_actions.add(action_fingerprint)
                         break
                     elif attempt < retry_limit - 1:
                         logger.warning(f"⚠️ Tool attempt {attempt+1} failed: {observation}. Retrying in 2s...")
@@ -320,6 +382,8 @@ Based on the Scratchpad, select and fill the correct tool in the Native JSON Sch
                 observation = f"Observation: Tool failed after {retry_limit} retries. Try a different approach."
 
             scratchpad += f"\n- Step {step+1}: {observation}"
+            step += 1
+            time.sleep(1)
 
         except Exception as e:
             error_msg = str(e)
@@ -330,16 +394,14 @@ Based on the Scratchpad, select and fill the correct tool in the Native JSON Sch
             logger.error(f"❌ Agent Loop Error (API/Crash): {e}")
             time.sleep(3)
             scratchpad += f"\n- System Error on Step {step+1}: {e}. Skipping this tool."
-        
-        step += 1
-        time.sleep(1)
+            step += 1
 
-    return make_result("Bhai, maine maximum steps (10) le liye hain. Task loop limit tak pahunch gaya hai.", priority="high", agent_executed=True)
+    return make_result(f"Bhai, maine maximum steps ({max_steps}) le liye hain. Task loop limit tak pahunch gaya hai. Kripya simple command do.", priority="high", agent_executed=True)
 
 # ==================================================================================
 # 🚦 PURE AI ROUTER (ULTRA-SMART 2-TIER ROUTING)
 # ==================================================================================
-def fetch_hybrid_response(raw_command: str, context: str, search_results: str = "") -> Optional[Dict[str, any]]:
+def fetch_hybrid_response(raw_command: str, context: str, search_results: str = "", memory_instance=None) -> Optional[Dict[str, any]]:
     if not groq_client: return None
     try:
         router_prompt = f"""You are Jarvis's core Intent Router.
@@ -351,6 +413,7 @@ Your job is to logically classify the user's command into exactly ONE of two cat
    - ALWAYS use for opening/closing apps, URLs, or playing YouTube videos.
    - ALWAYS use for general chat, jokes, or direct factual questions.
    - ALWAYS use for opening a file from workspace (e.g., "khol report.md" or "open my image").
+   - ALWAYS use if the command is just to open links that were already provided in previous conversation.
 
 2. 'AGENTIC' (For All Advanced Tools & Multi-step Tasks)
    - ALWAYS use if the command mentions SENDING Email or WhatsApp.
@@ -378,10 +441,11 @@ Reply strictly with ONLY ONE WORD: 'FAST' or 'AGENTIC'."""
         
         if "AGENTIC" in decision:
             logger.info("🚦 Smart Router: AGENTIC (Deep Tasks & Comms)")
-            return run_agentic_loop(raw_command, context)
+            return run_agentic_loop(raw_command, context, memory_instance)
         else:
             logger.info("🚦 Smart Router: FAST (Direct Apps / Quick Chat / File Open)")
-            return fetch_from_groq(raw_command, context, search_results)
+            ephemeral = memory_instance.ephemeral if memory_instance else None
+            return fetch_from_groq(raw_command, context, search_results, ephemeral)
             
     except Exception as e:
         logger.error(f"⚠️ Smart Router Error: {e}. Defaulting to Fast Brain.")
@@ -390,7 +454,7 @@ Reply strictly with ONLY ONE WORD: 'FAST' or 'AGENTIC'."""
 # ==================================================================================
 # MAIN PROCESSOR
 # ==================================================================================
-def process_with_cohere(raw_command: str, context: str, search_results: str = "") -> Dict[str, any]:
+def process_with_cohere(raw_command: str, context: str, search_results: str = "", memory_instance=None) -> Dict[str, any]:
     cmd_lower = raw_command.lower().strip()
 
     if ("time" in cmd_lower or "samay" in cmd_lower) and "what" in cmd_lower:
@@ -403,7 +467,7 @@ def process_with_cohere(raw_command: str, context: str, search_results: str = ""
         return make_result(msg)
 
     resolved_command = resolve_pronouns(raw_command)
-    result = fetch_hybrid_response(resolved_command, context, search_results)
+    result = fetch_hybrid_response(resolved_command, context, search_results, memory_instance)
 
     if not result: return make_result("Connection failed, Sir.", priority="low")
 

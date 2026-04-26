@@ -29,6 +29,8 @@ class ContextMemory:
         self.file_hashes = self._load_json(self.file_hashes_file, {})
         self.preferences = self._load_json(self.preferences_file, {"likes": []})
         self.user_mood = self._load_json(self.user_mood_file, {"mood_history": []}) # 🎭 NEW: Mood Data
+
+        self.ephemeral = {} 
         
         self.current_mode = "General Assistant"
         self.mode_timer = datetime.now()

@@ -39,7 +39,7 @@ def main_command_processor(command: str, executor: ThreadPoolExecutor, memory: C
 
     # 2. AI Processing (Determine Intent via Router/Agent)
     logger.info(f"🧠 Processing Intent for: {raw}")
-    result = process_with_cohere(raw, context) 
+    result = process_with_cohere(raw, context, memory_instance=memory) 
     
     # 3. Execute Actions (Apps, Search, Automation, Workspace, Email, WhatsApp)
     execute_actions(result, executor)
