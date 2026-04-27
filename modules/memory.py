@@ -285,7 +285,7 @@ class ContextMemory:
             documents=[message]
         )
         
-        if self.chat_collection.count() > 50: self._summarize_old_messages()
+        if self.chat_collection.count() > 500: self._summarize_old_messages()
 
     def _summarize_old_messages(self):
         try:
