@@ -1,0 +1,90 @@
+# ==========================================
+# JARVIS PROJECT UPDATED GITIGNORE
+# ==========================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Environments (Very important)
+.env
+.venv
+env/
+venv/
+ENV/
+.envrc
+secrets.py
+config_local.py
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDEs & System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+
+# --- PROJECT SPECIFIC DATA (JSON & CACHE) ---
+
+# Ignore all dynamic JSON data files in Data root
+Data/*.json
+Data/*.log
+
+# Specific Data Files (Excluding from sync)
+Data/agent_status.json
+Data/app_cache.json
+Data/contacts.json
+Data/stt_status.json
+
+# Jarvis Memory (Ignore dynamic user data but keep templates/configs if needed)
+Data/jarvis_memory/*.json
+Data/jarvis_memory/chroma_db/
+
+# Exceptions: Agar aap chahte hain ki ye files hamesha GitHub par rahein
+!Data/jarvis_memory/preferences.json
+!Data/jarvis_memory/user_bio.json
+
+# Email Manager (Security)
+tools/Messanger/credentials.json
+tools/Messanger/token.json
+modules/emailManager/contact_book.json
+
+# --- WORKSPACE & MEDIA ---
+
+# Workspace - keep folder structure but ignore user creations
+Data/Jarvis_Workspace/Creations/*
+!Data/Jarvis_Workspace/Creations/.gitkeep
+Data/Jarvis_Workspace/Vault/*
+!Data/Jarvis_Workspace/Vault/.gitkeep
+Data/Jarvis_Workspace/Temp/*
+!Data/Jarvis_Workspace/Temp/.gitkeep
+Data/Jarvis_Workspace/registry.json
+
+# Multimedia & Temp
+*.wav
+*.mp3
+*.ogg
+*.png
+*.jpg
+*.jpeg
+*.tmp
+*.bak
+*.pkl
+*.pickle
+
+# --- TOOLS & BINARIES ---
+C:/ffmpeg/
+/ffmpeg/
+*.exe
+*.dll
+
+important_bugs.txt 
