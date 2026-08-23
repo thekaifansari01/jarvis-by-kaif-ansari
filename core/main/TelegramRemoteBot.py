@@ -1,6 +1,6 @@
 import os
 import json
-import logging
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import telebot
@@ -71,18 +71,26 @@ def start_telegram_remote_listener():
                     _global_executor.submit(main_command_processor, cmd_text, _global_executor, _global_memory, "telegram_bot")
 
         def _poll_worker():
+            global _is_polling
             logger.info("Telegram Remote Bot Service started listening...")
-            try:
-                _bot_instance.infinity_polling(timeout=20, long_polling_timeout=10)
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "polling exited" in error_msg or "break infinity polling" in error_msg:
-                    logger.debug("Telegram polling stopped gracefully.")
-                else:
-                    logger.error(f"Telegram Bot Polling Error: {e}")
-            finally:
-                global _is_polling
-                _is_polling = False
+            retries = 0
+            while _is_polling:
+                try:
+                    _bot_instance.infinity_polling(timeout=20, long_polling_timeout=10)
+                    break
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "polling exited" in error_msg or "break infinity polling" in error_msg:
+                        break
+                    retries += 1
+                    logger.error(f"Telegram Bot Polling Error: {e}. Retry {retries}/5.")
+                    if retries >= 5:
+                        logger.error("Max retries reached. Stopping Telegram polling.")
+                        _is_polling = False
+                        break
+                    time.sleep(5)
+            _is_polling = False
+            logger.info("Telegram polling stopped.")
 
         _bot_thread = threading.Thread(target=_poll_worker, daemon=True)
         _bot_thread.start()
