@@ -2,17 +2,19 @@ import os
 import time
 import datetime
 import webbrowser
+import json
 from pathlib import Path
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from core.logger.logger import logger
+from core.security import load_decrypted_token, save_encrypted_token
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 COOKIES_DIR = BASE_DIR / "Data" / "SessionCookies"
 COOKIES_DIR.mkdir(parents=True, exist_ok=True)
-TOKEN_PATH = COOKIES_DIR / "calendar_token.json"
+TOKEN_PATH = COOKIES_DIR / "calendar_token.enc"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
 
@@ -35,8 +37,10 @@ def authenticate_calendar(interactive: bool = True):
     creds = None
     if TOKEN_PATH.exists():
         try:
-            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-            logger.debug("✅ Calendar token found.")
+            token_info = load_decrypted_token(str(TOKEN_PATH))
+            if token_info:
+                creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+                logger.debug("✅ Calendar token found.")
         except Exception:
             creds = None
             try:
@@ -48,8 +52,7 @@ def authenticate_calendar(interactive: bool = True):
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                with open(TOKEN_PATH, 'w') as token:
-                    token.write(creds.to_json())
+                save_encrypted_token(json.loads(creds.to_json()), str(TOKEN_PATH))
                 logger.info("🔄 Calendar token refreshed.")
             except Exception:
                 creds = None
@@ -59,20 +62,24 @@ def authenticate_calendar(interactive: bool = True):
                     pass
 
         if (not creds or not creds.valid) and interactive:
+            import uuid
+            secure_session = str(uuid.uuid4())
             logger.info("🌐 Opening browser for Calendar OAuth...")
-            webbrowser.open("https://jarvis-os-agent.vercel.app/api/oauth/start?service=calendar")
+            webbrowser.open(f"https://jarvis-os-agent.vercel.app/api/oauth/start?service=calendar&state={secure_session}")
             timeout = 120
             start_time = time.time()
             while time.time() - start_time < timeout:
                 if TOKEN_PATH.exists():
                     try:
-                        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-                        if creds.valid:
-                            logger.info("✅ Calendar OAuth completed.")
-                            break
+                        token_info = load_decrypted_token(str(TOKEN_PATH))
+                        if token_info:
+                            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+                            if creds and creds.valid:
+                                logger.info("✅ Calendar OAuth completed.")
+                                break
                     except Exception:
                         pass
-                time.sleep(2)
+                time.sleep(3)
 
     if creds and creds.valid:
         return build('calendar', 'v3', credentials=creds), "Success"

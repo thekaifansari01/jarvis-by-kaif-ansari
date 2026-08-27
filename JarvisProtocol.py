@@ -1,14 +1,18 @@
 import sys
 import os
-import json
 import requests
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from core.logger.logger import logger
+from core.security import save_encrypted_token
 
 load_dotenv()
 
 def handle_protocol(url):
+    if not url.lower().startswith("jarvis://"):
+        logger.error(f"Invalid protocol scheme detected in URL: {url}")
+        return
+
     try:
         parsed_url = urlparse(url)
         query_params = parse_qs(parsed_url.query)
@@ -44,16 +48,15 @@ def handle_protocol(url):
         os.makedirs(cookies_dir, exist_ok=True)
 
         if service == "calendar":
-            token_file = "calendar_token.json"
+            token_file = "calendar_token.enc"
         else:
-            token_file = "token.json"
+            token_file = "token.enc"
 
         save_path = os.path.join(cookies_dir, token_file)
 
-        with open(save_path, "w") as f:
-            json.dump(tokens, f, indent=4)
+        save_encrypted_token(tokens, save_path)
 
-        logger.info(f"SUCCESS: OAuth token for '{service}' was successfully retrieved and saved.")
+        logger.info(f"SUCCESS: OAuth token for '{service}' was successfully retrieved and saved securely.")
         logger.info(f"File Path: {save_path}")
 
     except Exception as e:

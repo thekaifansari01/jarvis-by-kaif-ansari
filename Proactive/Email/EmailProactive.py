@@ -16,17 +16,18 @@ PUBSUB_SCOPE = 'https://www.googleapis.com/auth/pubsub'
 if PUBSUB_SCOPE not in email_manager.SCOPES:
     email_manager.SCOPES.append(PUBSUB_SCOPE)
 
+from core.security import load_decrypted_token
+
 base_path = os.path.dirname(os.path.abspath(__file__))
 project_root = base_path
 while os.path.basename(project_root) in ["tools", "Messanger", "core", "brain", "Proactive", "Email"]:
     project_root = os.path.dirname(project_root)
-token_path = os.path.join(project_root, 'Data', 'SessionCookies', 'token.json')
+token_path = os.path.join(project_root, 'Data', 'SessionCookies', 'token.enc')
 
 if os.path.exists(token_path):
     try:
-        with open(token_path, 'r') as f:
-            token_data = json.load(f)
-        if PUBSUB_SCOPE not in token_data.get('scopes', []):
+        token_data = load_decrypted_token(token_path)
+        if token_data and PUBSUB_SCOPE not in token_data.get('scopes', []):
             os.remove(token_path)
     except Exception:
         pass

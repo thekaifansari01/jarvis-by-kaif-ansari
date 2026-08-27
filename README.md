@@ -69,7 +69,7 @@
 | 🗣️ | **Voice‑First Multimodal AI** | Integrates Deepgram Nova-2 STT with **Vosk KWS (Keyword Spotting)** for sub-second noise-immune triggering. Features Edge TTS voice output, multimodal vision (OCR/Image Analysis), and AI Image Generation (OpenAI-compatible API + AI Horde fallback). |
 | 🔌 | **Multi‑LLM Auto‑Failover (Cloud & Local)** | Seamlessly switches between Regolo, Gemini, OpenRouter, or **Local LLMs (Ollama, LM Studio, vLLM)**. Zero downtime workflow execution even if the primary provider hits API rate limits. |
 | 🎨 | **Reactive Dynamic UI Ecosystem** | Features a ZMQ‑powered floating PyQt5 Agent Panel with real‑time thought/action/observation streaming. Includes a live markdown typing popup with async image previews, glass‑morphism, and auto-resize dynamic glow. |
-| 🔒 | **Enterprise‑Grade Command Security** | Utilizes `shlex` tokenization and `os.path.realpath` canonicalization to auto‑block system‑destroying terminal commands (e.g., `rm -rf /`, `format C:`). Safe commands (`pip`, `git`) execute frictionlessly. |
+| 🔒 | **Enterprise‑Grade Command Security** | Utilizes `shlex` tokenization to auto‑block system-destroying terminal commands (e.g., `rm -rf /`). Features local AES-Encryption (`.enc`) for Gmail, Calendar, and Telegram session tokens to prevent credential theft. |
 | ⚙️ | **ServiceWatchdog Resilience** | A dedicated background watchdog monitors processes (STT, Baileys, ADB, Telegram). It intelligently auto-restarts crashed services while skipping unauthenticated modules to prevent spam. |
 
 ---
