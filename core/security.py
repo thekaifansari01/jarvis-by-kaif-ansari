@@ -3,7 +3,7 @@ import json
 from cryptography.fernet import Fernet
 from core.logger.logger import logger
 
-KEY_FILE = os.path.join(os.path.dirname(__file__), 'secret.key')
+KEY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Data', 'SessionCookies', 'secret.key')
 
 def get_or_create_key():
     if not os.path.exists(KEY_FILE):
